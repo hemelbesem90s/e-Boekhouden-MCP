@@ -57,7 +57,16 @@ from eboekhouden_mcp.tools.templates import (
 )
 from eboekhouden_mcp.tools.units import ListUnitsTool
 from eboekhouden_mcp.tools.power import register_power_tools
-
+from eboekhouden_mcp.tools.inbox import (
+    GetDutchBookkeepingRulesTool,
+    PrepareBookingProposalTool,
+    SuggestTransactionClassificationTool,
+)
+from eboekhouden_mcp.web_session.tools import (
+    AttachFileToMutationTool,
+    GetUnprocessedBankTransactionsTool,
+    SuggestMutationForBankStatementTool,
+)
 
 WRITE_TOOL_NAMES = frozenset(
     {
@@ -76,6 +85,7 @@ WRITE_TOOL_NAMES = frozenset(
         "create_member",
         "delete_member",
         "send_file_to_digital_archive",
+        "attach_file_to_mutation",
     }
 )
 
@@ -89,6 +99,22 @@ DESTRUCTIVE_TOOL_NAMES = frozenset(
 )
 
 ARCHIVE_TOOL_NAME = "send_file_to_digital_archive"
+
+WEB_SESSION_TOOL_NAMES = frozenset(
+    {
+        "get_unprocessed_bank_transactions",
+        "suggest_mutation_for_bank_statement",
+        "attach_file_to_mutation",
+    }
+)
+
+INBOX_TOOL_NAMES = frozenset(
+    {
+        "get_dutch_bookkeeping_rules",
+        "prepare_booking_proposal",
+        "suggest_transaction_classification",
+    }
+)
 
 
 def register_all_tools(registry: ToolRegistry) -> None:
@@ -155,6 +181,16 @@ def register_all_tools(registry: ToolRegistry) -> None:
     # Power tools (12): enriched search, batch detail, reports
     register_power_tools(registry)
 
+    # AI Bookkeeping Inbox (3 tools)
+    registry.register(GetDutchBookkeepingRulesTool())
+    registry.register(PrepareBookingProposalTool())
+    registry.register(SuggestTransactionClassificationTool())
+
+    # Web session bridge (3 tools)
+    registry.register(GetUnprocessedBankTransactionsTool())
+    registry.register(SuggestMutationForBankStatementTool())
+    registry.register(AttachFileToMutationTool())
+
 
 __all__ = [
     "BaseTool",
@@ -164,4 +200,6 @@ __all__ = [
     "WRITE_TOOL_NAMES",
     "DESTRUCTIVE_TOOL_NAMES",
     "ARCHIVE_TOOL_NAME",
+    "WEB_SESSION_TOOL_NAMES",
+    "INBOX_TOOL_NAMES",
 ]

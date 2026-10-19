@@ -6,11 +6,11 @@ service, or multi-user authorization layer.
 
 ## Data flow
 
-1. The MCP client starts `eboekhouden-mcp` as the current operating-system user.
-2. The server reads its token from the environment or a local `.env`.
-3. The bundled client exchanges that token for a short-lived API session over
-   HTTPS.
-4. Tool results return to the same MCP client over stdio.
+1. The MCP client starts `eboekhouden-mcp` as the current operating-system user over stdio.
+2. The server reads its token from the host OS credential manager (Keyring) or a local `.env`.
+3. The bundled client exchanges that token for a short-lived API session over HTTPS.
+4. Mutating actions require explicit confirmation and pass through a native OS biometric hardware prompt.
+5. Tool results return to the same MCP client over stdio.
 
 The selected AI client can see tool results, including accounting data. Its own
 retention, model-training, workspace, and privacy controls remain outside this
@@ -21,6 +21,8 @@ project's boundary.
 | Risk | Control |
 |---|---|
 | Accidental write | Write tools are absent unless the operator enables them; every write also requires `confirm: true`. |
+| Unattended write execution | Native OS biometric hardware gate (Windows Hello / Touch ID) presents an interactive modal before executing writes. |
+| Plaintext secret exposure | Native OS Keyring support loads tokens from Windows Credential Manager or macOS Keychain. |
 | Destructive action | MCP annotations identify destructive tools; server instructions require exact user confirmation. |
 | Credential exfiltration | Only the official API host is accepted by default; custom hosts require an explicit override and HTTPS. |
 | Credential leakage | Pydantic secret types redact config representations; errors omit request bodies and values. |
@@ -29,6 +31,26 @@ project's boundary.
 | Arbitrary file read | Archive delivery is disabled separately and resolves every file beneath one configured root. |
 | Oversized attachment | Archive files are limited to 3 MiB and an allowlist of PDF/image extensions. |
 | Protocol corruption | Application logs go to stderr; stdout is reserved for MCP JSON-RPC. |
+
+## Native Biometric Hardware Gate
+
+When write tools are enabled and `EBOEKHOUDEN_MCP_REQUIRE_BIOMETRIC=true` (default), all write actions trigger an interactive OS hardware confirmation challenge:
+- **Windows**: Windows Hello via `[Windows.Security.Credentials.UI.UserConsentVerifier]`. Requires Face recognition, Fingerprint scan, or PIN.
+- **macOS**: `LocalAuthentication` / Touch ID.
+- **Linux / Unsupported**: Fails closed (verification denied).
+
+The modal dialog dynamically formats the transaction type and financial amounts:
+- *Invoices*: `"e-Boekhouden MCP: Approve POST Invoice for EUR 1,250.00 to Relation 42?"`
+- *Mutations*: `"e-Boekhouden MCP: Approve POST Mutation of EUR 540.00 on Ledger 8000?"`
+- *Deletions*: `"e-Boekhouden MCP: Approve DELETE delete_relation for ID 123?"`
+
+## Keyring Credential Store
+
+To avoid storing credentials in plaintext `.env` files:
+```bash
+python -c "import keyring; keyring.set_password('eboekhouden_mcp', 'secret_token', '<your-token>')"
+```
+The server checks `keyring.get_password('eboekhouden_mcp', 'secret_token')` when `EBOEKHOUDEN_MCP_SECRET_TOKEN` is unset.
 
 ## Operator responsibilities
 

@@ -80,7 +80,7 @@ async def test_default_mcp_surface_exposes_only_annotated_read_tools():
     result = await server.request_handlers[ListToolsRequest](ListToolsRequest())
     tools = result.root.tools
 
-    assert len(tools) == 34
+    assert len(tools) == 37
     assert "create_relation" not in {tool.name for tool in tools}
     assert all(tool.annotations.readOnlyHint is True for tool in tools)
     assert all(tool.annotations.destructiveHint is False for tool in tools)
@@ -99,7 +99,7 @@ async def test_write_surface_has_side_effect_annotations():
     result = await server.request_handlers[ListToolsRequest](ListToolsRequest())
     tools = {tool.name: tool for tool in result.root.tools}
 
-    assert len(tools) == 48
+    assert len(tools) == 51
     assert tools["create_relation"].annotations.readOnlyHint is False
     assert tools["create_relation"].annotations.destructiveHint is False
     assert "confirm" in tools["create_relation"].inputSchema["required"]

@@ -1,13 +1,13 @@
 """Configuration for the e-Boekhouden MCP server."""
 
+import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing_extensions import Self
-
 
 OFFICIAL_API_HOST = "api.e-boekhouden.nl"
 
@@ -19,6 +19,7 @@ class MCPConfig(BaseSettings):
         env_prefix="EBOEKHOUDEN_MCP_",
         env_file=".env",
         env_file_encoding="utf-8",
+        populate_by_name=True,
         extra="ignore",
     )
 
@@ -35,6 +36,53 @@ class MCPConfig(BaseSettings):
     enable_archive_tool: bool = False
     archive_root: Path | None = None
     allow_custom_api_url: bool = False
+    require_biometric: bool = Field(
+        default=True,
+        validation_alias="EBOEKHOUDEN_MCP_REQUIRE_BIOMETRIC",
+    )
+    keyring_service_name: str = Field(
+        default="eboekhouden_mcp",
+        validation_alias="EBOEKHOUDEN_MCP_KEYRING_SERVICE",
+    )
+
+    # Web session bridge settings
+    enable_web_session: bool = Field(
+        default=False,
+        validation_alias="EBOEKHOUDEN_MCP_ENABLE_WEB_SESSION",
+    )
+    web_session_token: SecretStr | None = Field(
+        default=None,
+        validation_alias="EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN",
+    )
+    web_session_base_url: str = Field(
+        default="https://secure20.e-boekhouden.nl",
+        validation_alias="EBOEKHOUDEN_MCP_WEB_SESSION_BASE_URL",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_token_from_keyring(cls, data: Any) -> Any:
+        d = dict(data) if isinstance(data, dict) else {}
+        token = d.get("secret_token") or d.get("EBOEKHOUDEN_MCP_SECRET_TOKEN")
+        if isinstance(token, SecretStr):
+            raw_token = token.get_secret_value()
+        else:
+            raw_token = str(token) if token is not None else ""
+
+        if not raw_token.strip():
+            service_name = d.get(
+                "keyring_service_name",
+                os.environ.get("EBOEKHOUDEN_MCP_KEYRING_SERVICE", "eboekhouden_mcp"),
+            )
+            try:
+                import keyring
+
+                keyring_token = keyring.get_password(service_name, "secret_token")
+                if keyring_token and keyring_token.strip():
+                    d["secret_token"] = keyring_token.strip()
+            except Exception:
+                pass
+        return d
 
     @field_validator("secret_token")
     @classmethod

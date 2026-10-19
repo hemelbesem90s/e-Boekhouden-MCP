@@ -79,8 +79,8 @@ class TestRegisterAllTools:
         registry = ToolRegistry()
         register_all_tools(registry)
 
-        # 37 base tools + 12 power tools
-        assert len(registry) == 49
+        # 37 base tools + 12 power tools + 6 extension tools
+        assert len(registry) == 55
 
     def test_tool_categories(self):
         """Test that tools from all categories are registered."""
@@ -108,7 +108,7 @@ class TestRegisterAllTools:
         side_effect_tools = {
             tool.name
             for tool in registry.list_tools()
-            if tool.name.startswith(("create_", "update_", "delete_", "send_"))
+            if tool.name.startswith(("create_", "update_", "delete_", "send_", "attach_"))
         }
 
         assert side_effect_tools == WRITE_TOOL_NAMES

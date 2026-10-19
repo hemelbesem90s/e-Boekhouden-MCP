@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -15,11 +15,17 @@ from pydantic import SecretStr, ValidationError
 
 from eboekhouden import EBoekhoudenClient, EBoekhoudenConfig
 from eboekhouden.exceptions import EBoekhoudenError
-
+from eboekhouden_mcp.biometric_guard import (
+    BiometricHardwareUnavailable,
+    BiometricVerificationDenied,
+    format_write_prompt,
+    verify_user_presence,
+)
 from eboekhouden_mcp.config import MCPConfig
 from eboekhouden_mcp.tools import (
     ARCHIVE_TOOL_NAME,
     DESTRUCTIVE_TOOL_NAMES,
+    WEB_SESSION_TOOL_NAMES,
     WRITE_TOOL_NAMES,
     ToolRegistry,
     register_all_tools,
@@ -61,6 +67,19 @@ class EBoekhoudenMCPServer:
         # Register all tools
         register_all_tools(self.registry)
 
+        # Wire up web session client if enabled
+        if self.config.enable_web_session and self.config.web_session_token:
+            from eboekhouden_mcp.web_session.client import WebSessionClient
+
+            web_client = WebSessionClient(
+                auth_token=self.config.web_session_token.get_secret_value(),
+                base_url=self.config.web_session_base_url,
+            )
+            for tool_name in WEB_SESSION_TOOL_NAMES:
+                registered_tool = self.registry.get(tool_name)
+                if registered_tool is not None and hasattr(registered_tool, "set_client"):
+                    registered_tool.set_client(web_client)
+
         # Create SDK config
         self._sdk_config = EBoekhoudenConfig(
             secret_token=SecretStr(config.secret_token.get_secret_value()),
@@ -70,6 +89,12 @@ class EBoekhoudenMCPServer:
 
     def tool_is_enabled(self, name: str) -> bool:
         """Return whether an operator enabled the requested capability."""
+        if name in WEB_SESSION_TOOL_NAMES:
+            if not self.config.enable_web_session:
+                return False
+            if name in WRITE_TOOL_NAMES and not self.config.enable_write_tools:
+                return False
+            return True
         if name == ARCHIVE_TOOL_NAME:
             return self.config.enable_write_tools and self.config.enable_archive_tool
         if name in WRITE_TOOL_NAMES:
@@ -175,11 +200,12 @@ def create_server(config: MCPConfig | None = None) -> Server:
             return _error_result({"error": f"Unknown tool: {name}"})
 
         if not mcp_server.tool_is_enabled(name):
-            setting = (
-                "EBOEKHOUDEN_MCP_ENABLE_ARCHIVE_TOOL"
-                if name == ARCHIVE_TOOL_NAME
-                else "EBOEKHOUDEN_MCP_ENABLE_WRITE_TOOLS"
-            )
+            if name in WEB_SESSION_TOOL_NAMES:
+                setting = "EBOEKHOUDEN_MCP_ENABLE_WEB_SESSION"
+            elif name == ARCHIVE_TOOL_NAME:
+                setting = "EBOEKHOUDEN_MCP_ENABLE_ARCHIVE_TOOL"
+            else:
+                setting = "EBOEKHOUDEN_MCP_ENABLE_WRITE_TOOLS"
             return _error_result(
                 {
                     "error": "Tool disabled by server policy",
@@ -200,6 +226,22 @@ def create_server(config: MCPConfig | None = None) -> Server:
                     }
                 )
             execution_arguments.pop(WRITE_CONFIRMATION_FIELD)
+
+            if mcp_server.config.require_biometric:
+                prompt = format_write_prompt(name, execution_arguments)
+                try:
+                    verify_user_presence(prompt)
+                except (
+                    BiometricVerificationDenied,
+                    BiometricHardwareUnavailable,
+                ) as exc:
+                    return _error_result(
+                        {
+                            "error": "Biometric verification denied",
+                            "reason": str(exc),
+                            "tool": name,
+                        }
+                    )
 
         try:
             validated = tool.input_schema.model_validate(execution_arguments)
@@ -272,8 +314,29 @@ def main() -> None:
         action="store_true",
         help="validate configuration without connecting to e-Boekhouden",
     )
+    parser.add_argument(
+        "--test-biometric",
+        action="store_true",
+        help="test native OS biometric verification prompt",
+    )
     parser.add_argument("--version", action="version", version="%(prog)s 0.2.0")
     args = parser.parse_args()
+
+    if args.test_biometric:
+        prompt = "e-Boekhouden MCP: Biometric Verification Test"
+        try:
+            verify_user_presence(prompt)
+            print("Biometric verification succeeded.")
+            return
+        except BiometricVerificationDenied as exc:
+            print(f"Biometric verification denied: {exc}", file=sys.stderr)
+            raise SystemExit(1) from None
+        except BiometricHardwareUnavailable as exc:
+            print(f"Biometric hardware unavailable: {exc}", file=sys.stderr)
+            raise SystemExit(2) from None
+        except Exception as exc:
+            print(f"Biometric verification error: {exc}", file=sys.stderr)
+            raise SystemExit(3) from None
 
     try:
         config = MCPConfig()

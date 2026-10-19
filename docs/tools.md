@@ -1,8 +1,6 @@
 # Tool catalog
 
-The server registers 49 tools. The default surface contains only the 34
-read-only tools. Enabling writes exposes 14 accounting write tools; enabling the
-archive flag as well exposes the final archive tool.
+The server registers 55 tools across four architectural layers. The default surface contains 39 read-only tools (34 core REST v1 tools, 3 AI Bookkeeping Inbox tools, and 2 web session inspection tools). Enabling writes exposes 16 write tools (14 accounting write tools, 1 archive tool, and 1 mutation attachment tool), gated behind explicit confirmation and native OS biometrics.
 
 ## Search and batch detail
 
@@ -42,10 +40,25 @@ archive flag as well exposes the final archive tool.
 | Units | `list_units` | - |
 | Digital archive | - | `send_file_to_digital_archive` |
 
+## AI Bookkeeping Inbox & Heuristics
+
+| Tool | Purpose | Read/Write |
+|---|---|---|
+| `get_dutch_bookkeeping_rules` | Return authoritative Dutch VAT rules, decision tree, receipt heuristics, and tax tips. | Read-only |
+| `prepare_booking_proposal` | Validate extracted invoice data against live ledgers/relations to synthesize balanced bookings. | Read-only |
+| `suggest_transaction_classification` | Classify bank statement lines and suggest ledger accounts, VAT codes, and mutation types. | Read-only |
+
+## Web Session Bridge (Optional)
+
+| Tool | Purpose | Read/Write |
+|---|---|---|
+| `get_unprocessed_bank_transactions` | Read raw bank statement entries directly from e-Boekhouden's internal import grid. | Read-only |
+| `suggest_mutation_for_bank_statement` | Get mutation prefill suggestions from internal bank matching logic. | Read-only |
+| `attach_file_to_mutation` | Link an uploaded archive document directly to a mutation via `/folderkoppel`. | Opt-in Write |
+
 ## Result behavior
 
-- Standard list tools follow the API's `limit` range of 1 through 2000 and a
-  non-negative `offset`.
+- Standard list tools follow the API's `limit` range of 1 through 2000 and a non-negative `offset`.
 - Power searches and batch tools cap work to protect API usage and model context.
 - Compact output removes null fields unless verbose output is requested.
 - A truncated result includes a hint describing how to request the next slice.
@@ -54,11 +67,6 @@ archive flag as well exposes the final archive tool.
 
 ## Write behavior
 
-Write tools are not advertised until
-`EBOEKHOUDEN_MCP_ENABLE_WRITE_TOOLS=true`. Every advertised write schema then
-contains a required `confirm` boolean. The server accepts the operation only
-when its value is exactly `true` and removes it before calling the API.
+Write tools are not advertised until `EBOEKHOUDEN_MCP_ENABLE_WRITE_TOOLS=true`. Every advertised write schema contains a required `confirm` boolean. The server accepts the operation only when its value is exactly `true`.
 
-The archive tool additionally requires
-`EBOEKHOUDEN_MCP_ENABLE_ARCHIVE_TOOL=true`, an existing archive root, and the
-Microsoft Graph variables documented in [integrations](integrations.md#optional-digital-archive-delivery).
+When `EBOEKHOUDEN_MCP_REQUIRE_BIOMETRIC=true` (the default), any write action also prompts for native OS biometric verification (Windows Hello / Touch ID) with an action summary before dispatching to the API.

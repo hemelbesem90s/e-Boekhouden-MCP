@@ -1,0 +1,42 @@
+e-Boekhouden Hybrid MCP Server
+Copyright (c) 2026 e-Boekhouden Hybrid MCP Contributors
+
+This project is licensed under the MIT License.
+
+================================================================================
+Upstream Software Attribution & Credits
+================================================================================
+
+This project incorporates and builds upon software and intellectual property
+developed by the open-source community:
+
+1. e-Boekhouden-MCP
+   Repository: https://github.com/matisup10/e-Boekhouden-MCP
+   Author: matisup10 and contributors
+   License: MIT License
+   Contribution:
+     - 49-tool core REST v1 MCP server architecture and tool definitions
+     - Comprehensive e-Boekhouden REST API client and Pydantic models
+     - Batch hydration, compact search, and financial reporting modules
+     - Write-action explicit confirmation security pattern
+
+2. speedy-eboekhouden
+   Repository: https://github.com/JoooostB/speedy-eboekhouden
+   Author: Joost and contributors
+   License: MIT License
+   Contribution:
+     - Dutch bookkeeping prompt engineering and tax domain rules
+     - Dutch VAT decision tree (EU VAT Directive Art. 226, reverse-charge)
+     - AI invoice/receipt structured extraction and classification heuristics
+     - Reverse-engineered e-Boekhouden internal web session API schemas
+       (bank statement import grid, attachment linking, hour overview)
+
+================================================================================
+Additional Third-Party Software & Libraries
+================================================================================
+
+This software uses the following third-party libraries:
+- Model Context Protocol (MCP) Python SDK (Anthropic / Linux Foundation)
+- HTTPX & HTTPCore (Encode OSS)
+- Pydantic & Pydantic-Settings
+- Keyring (Python Cryptographic Authority)

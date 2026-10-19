@@ -2,285 +2,353 @@
   <img src="docs/assets/logo.svg" width="128" height="128" alt="e-Boekhouden MCP logo">
 </p>
 
-<h1 align="center">e-Boekhouden MCP</h1>
+<h1 align="center">e-Boekhouden Hybrid MCP Server</h1>
 
 <p align="center">
-  A secure, local Model Context Protocol server for your own e-Boekhouden administration.
+  A secure, local Model Context Protocol (MCP) server combining the complete 49-tool REST v1 e-Boekhouden engine with AI bookkeeping heuristics, Dutch VAT classification, native OS biometric hardware gating (Windows Hello & Touch ID), and an optional web session bridge.
 </p>
 
 <p align="center">
-  <a href="https://github.com/matisup10/e-Boekhouden-MCP/actions/workflows/ci.yml"><img src="https://github.com/matisup10/e-Boekhouden-MCP/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/matisup10/e-Boekhouden-MCP/actions/workflows/codeql.yml"><img src="https://github.com/matisup10/e-Boekhouden-MCP/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
   <img src="https://img.shields.io/badge/Python-3.10--3.13-3776AB?logo=python&logoColor=white" alt="Python 3.10 through 3.13">
-  <img src="https://img.shields.io/badge/MCP-stdio-147D64" alt="MCP stdio">
+  <img src="https://img.shields.io/badge/MCP-stdio%20%7C%2055%20Tools-147D64" alt="MCP stdio 55 Tools">
+  <img src="https://img.shields.io/badge/Biometric%20Gate-Windows%20Hello%20%7C%20Touch%20ID-blueviolet" alt="Biometric Hardware Gate">
+  <img src="https://img.shields.io/badge/Credential%20Store-Keyring%20%2F%20Keychain-0078D4" alt="OS Keyring Integration">
+  <img src="https://img.shields.io/badge/Coverage-82%25-brightgreen" alt="82% Test Coverage">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2E7D32" alt="MIT license"></a>
 </p>
 
 <p align="center">
+  <a href="#architectural-layers">Architecture</a> ·
   <a href="#quick-start">Quick start</a> ·
-  <a href="#connect-an-ai-assistant">AI assistants</a> ·
-  <a href="#tools">Tools</a> ·
-  <a href="#safety-model">Safety</a> ·
-  <a href="docs/development.md">Contributing</a>
+  <a href="#ai-client-configuration">AI assistants</a> ·
+  <a href="#tool-catalog-55-tools">Tool catalog</a> ·
+  <a href="#security--biometric-hardware-gate">Biometric security</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#credits--attribution">Credits & Attribution</a>
 </p>
 
-Connect Claude, ChatGPT desktop, Codex, Cursor, VS Code, Windsurf, Gemini CLI,
-or any local MCP client directly to the official e-Boekhouden API. The server
-runs on your machine over stdio: there is no hosted middleman, shared account,
-or bundled credential.
+---
+
+Connect **Claude Desktop**, **Cursor**, **Antigravity**, **VS Code**, **Windsurf**, **Gemini CLI**, or any local MCP-compatible assistant directly to your **e-Boekhouden.nl** administration. The server runs entirely on your local machine over standard I/O (stdio): no credentials pass through third-party servers, and all write operations require physical user presence verification.
 
 > [!IMPORTANT]
-> Bring your own e-Boekhouden API token. This independent community project is
-> not affiliated with or endorsed by e-Boekhouden.nl.
+> Bring your own e-Boekhouden API token. This independent community project is licensed under the MIT License and is not affiliated with or endorsed by e-Boekhouden.nl.
 
-## Why this server
+---
 
-| | Behavior |
-|---|---|
-| **Local by design** | Your MCP client launches one local process; no port is opened. |
-| **Read-only first** | 34 search, detail, and reporting tools are available by default. |
-| **Writes have two locks** | The operator enables writes, then every call requires explicit `confirm: true`. |
-| **Strict inputs** | Unknown fields, invalid pagination, malformed rows, and oversized batches are rejected before API access. |
-| **Official host guard** | Credentials only go to `api.e-boekhouden.nl` unless a trusted custom HTTPS host is deliberately allowed. |
-| **Useful at scale** | Compact search, capped batch hydration, financial reports, aging, VAT, and ledger transaction tools are included. |
+## Architectural Layers
 
-## Quick start
+The e-Boekhouden Hybrid MCP architecture integrates 4 complementary layers into a unified, secure accounting surface:
 
-### 1. Install
+```mermaid
+flowchart TD
+    subgraph ClientLayer["AI Client Layer (Local stdio)"]
+        AI["AI Assistant\n(Claude / Cursor / Antigravity / Copilot)"]
+    end
 
-Requirements: Python 3.10+ and [`uv`](https://docs.astral.sh/uv/) or `pipx`.
+    subgraph SecurityLayer["Layer 3: Hardware Security & Credential Store"]
+        BioGate{"Native Biometric Gate\n(Windows Hello / Touch ID)"}
+        KeyringStore[("OS Keyring / Credential Manager\n(Zero-Plaintext Storage)")]
+    end
 
-```bash
-uv tool install git+https://github.com/matisup10/e-Boekhouden-MCP.git
+    subgraph MCPServer["e-Boekhouden Hybrid MCP Server (55 Tools)"]
+        Registry["Tool Registry & Input Validation\n(Pydantic v2 Strict Bounds)"]
+        
+        subgraph L1["Layer 1: Core REST v1 Engine (49 Tools)"]
+            RESTRead["34 Read Tools (Default)\n- Search & Batch Hydration\n- Financial Reports (Trial Balance, P&L, VAT, Aging)\n- Ledgers, Relations, Invoices, Mutations"]
+            RESTWrite["15 Opt-in Write Tools\n- Create / Update / Delete\n- Required 'confirm: true'"]
+        end
+
+        subgraph L2["Layer 2: AI Bookkeeping Inbox & OCR"]
+            DutchRules["Dutch Bookkeeping & VAT Rules\n(EU Art 226, EV Art 38, KIA, 80% Repr)"]
+            Proposal["Booking Proposal Engine\n(Bonnetje vs Invoice Matching)"]
+            BankClassify["Bank Statement Classifier\n(Ledger & VAT Code Suggestion)"]
+        end
+
+        subgraph L4["Layer 4: Modular Web Session Bridge (3 Tools)"]
+            WebGrid["Import Grid & Bank Reconciliation"]
+            WebAttach["Document Linker (/folderkoppel)"]
+        end
+    end
+
+    subgraph RemoteAPI["External Accounting Services"]
+        OfficialAPI["Official e-Boekhouden REST API\n(api.e-boekhouden.nl/v1/)"]
+        WebSession["Internal Web Session Endpoints\n(secure20.e-boekhouden.nl)"]
+    end
+
+    AI <-->|MCP JSON-RPC over stdio| Registry
+    KeyringStore -.->|Resolves Secret Token| Registry
+    Registry --> L1
+    Registry --> L2
+    Registry --> L4
+    RESTWrite -.->|Guarded by| BioGate
+    WebAttach -.->|Guarded by| BioGate
+    L1 -->|HTTPS Session| OfficialAPI
+    L4 -->|Session Token| WebSession
 ```
 
-With pipx:
+### 1. Core REST v1 MCP Surface (49 Tools)
+- **34 Read-Only Tools (Default)**: Fast search, bounded batch hydration, financial reports (Trial Balance, Profit & Loss, Balance Sheet, VAT summaries, AR/AP aging, ledger transactions), and resource inspection.
+- **15 Opt-in Write Tools**: Create invoices, book mutations, manage relations, products, ledgers, cost centers, and members. Every write requires explicit server configuration and client parameter confirmation.
 
-```bash
-pipx install 'git+https://github.com/matisup10/e-Boekhouden-MCP.git'
-```
+### 2. AI Bookkeeping Inbox & OCR Classification (3 Tools)
+- `get_dutch_bookkeeping_rules`: Authoritative Dutch tax rules, VAT decision trees (HOOG 21%, LAAG 9%, GEEN, VERL_INK reverse charge, EU Directive Art 226, Art 38 EV charging), receipt (*bonnetje*) detection heuristics, and Dutch tax deduction guidelines (KIA, 80% representation).
+- `prepare_booking_proposal`: Automatically parses structured invoice/receipt metadata, cross-references live relations and ledger accounts in e-Boekhouden, and synthesizes balanced booking payloads for `create_mutation` or `create_invoice`.
+- `suggest_transaction_classification`: Classifies raw bank statement descriptions, recommending appropriate debit/credit ledgers, VAT codes, and mutation types.
 
-### 2. Store your token outside a repository
+### 3. Native OS Biometric Hardware Gate & Keyring Store
+- **Hardware User Presence Verification**: Any destructive or mutating operation (`create_invoice`, `create_mutation`, `delete_*`) triggers a native OS biometric prompt (**Windows Hello** face/fingerprint/PIN or **macOS Touch ID** / `LocalAuthentication`).
+- **Dynamic Context Prompts**: Biometric modals display financial details in the prompt (e.g. `Approve POST Invoice for EUR 1,250.00 to Relation 42?`).
+- **Fail-Closed Design**: Rejections, timeouts, or missing biometric hardware immediately abort the tool call before touching the remote API.
+- **OS Keyring Integration**: Securely loads API tokens directly from Windows Credential Manager or macOS Keychain, eliminating plaintext tokens in `.env` files.
 
-macOS and Linux:
+### 4. Modular Web Session Bridge (3 Tools)
+- `get_unprocessed_bank_transactions`: Inspects unprocessed bank statements directly from e-Boekhouden's internal import grid.
+- `suggest_mutation_for_bank_statement`: Queries the internal suggestion engine for pre-filled booking parameters.
+- `attach_file_to_mutation`: Directly links uploaded digital archive receipts or invoices to journal mutations via `/v1/api/folderkoppel/koppel/item`.
 
-```bash
-mkdir -p ~/.config/eboekhouden-mcp
-chmod 700 ~/.config/eboekhouden-mcp
-printf '%s\n' 'EBOEKHOUDEN_MCP_SECRET_TOKEN=replace-with-your-own-token' \
-  > ~/.config/eboekhouden-mcp/.env
-chmod 600 ~/.config/eboekhouden-mcp/.env
-```
+---
 
-Windows PowerShell:
+## Tool Catalog (55 Tools)
+
+| Category | Read Tools (Enabled by Default) | Write Tools (Gated by Double-Lock + Biometrics) |
+|---|---|---|
+| **Relations** | `list_relations`, `get_relation`, `search_relations`, `get_relations_batch` | `create_relation`, `update_relation`, `delete_relation` |
+| **Invoices** | `list_invoices`, `get_invoice`, `search_invoices`, `get_invoices_batch` | `create_invoice` |
+| **Mutations** | `list_mutations`, `get_mutation`, `list_outstanding_invoices`, `search_mutations`, `get_mutations_batch` | `create_mutation` |
+| **Products** | `list_products`, `get_product`, `list_product_groups` | `create_product`, `update_product`, `delete_product` |
+| **Ledgers** | `list_ledgers`, `get_ledger`, `get_ledger_balance` | `create_ledger`, `update_ledger` |
+| **Cost Centers** | `list_cost_centers`, `get_cost_center` | `create_cost_center`, `delete_cost_center` |
+| **Members** | `list_members`, `get_member` | `create_member`, `delete_member` |
+| **Administration** | `list_administrations`, `list_linked_administrations` | — |
+| **Templates & Units**| `list_invoice_templates`, `list_email_templates`, `list_units` | — |
+| **Financial Reports** | `get_trial_balance`, `get_profit_loss`, `get_balance_sheet`, `get_vat_summary`, `get_ar_ap_aging`, `get_ledger_transactions` | — |
+| **AI Bookkeeping Inbox** | `get_dutch_bookkeeping_rules`, `prepare_booking_proposal`, `suggest_transaction_classification` | — |
+| **Digital Archive** | — | `send_file_to_digital_archive` |
+| **Web Session Bridge** | `get_unprocessed_bank_transactions`, `suggest_mutation_for_bank_statement` | `attach_file_to_mutation` |
+
+---
+
+## Security & Biometric Hardware Gate
+
+The server enforces a rigorous **triple-lock security model** for mutating operations:
+
+1. **Lock 1 (Server Policy)**: Write tools are not registered or advertised to the AI assistant unless `EBOEKHOUDEN_MCP_ENABLE_WRITE_TOOLS=true`.
+2. **Lock 2 (Explicit AI Confirmation)**: Every write tool schema strictly requires `confirm: true`. The assistant must present the exact action, identifiers, and monetary values to the user and obtain affirmative consent.
+3. **Lock 3 (Native Hardware Biometrics)**: Before executing the write request against the e-Boekhouden API, the server invokes the host operating system's authentication layer:
+   - **Windows**: `Windows.Security.Credentials.UI.UserConsentVerifier` (Windows Hello IR Camera, Fingerprint Sensor, or FIDO2 Security Key).
+   - **macOS**: `LocalAuthentication` framework / Touch ID.
+   - **Linux / Headless**: Fails closed unless biometric verification is explicitly disabled by the operator.
+
+### Testing Biometrics from the CLI
+
+Verify your OS biometric setup without launching an MCP client:
 
 ```powershell
-$configDir = Join-Path $env:USERPROFILE ".config\eboekhouden-mcp"
-New-Item -ItemType Directory -Force $configDir
-notepad (Join-Path $configDir ".env")
+# Windows
+eboekhouden-mcp --test-biometric
 ```
-
-Add `EBOEKHOUDEN_MCP_SECRET_TOKEN=replace-with-your-own-token`, replacing the
-placeholder with the token for your administration.
-
-### 3. Validate without contacting the API
 
 ```bash
-cd ~/.config/eboekhouden-mcp
-eboekhouden-mcp --check-config
-command -v eboekhouden-mcp
+# macOS
+python -m eboekhouden_mcp.server --test-biometric
 ```
 
-PowerShell equivalents:
+---
+
+## Keyring Credential Store Setup
+
+Rather than storing your API secret token in plaintext in `.env` files, use your operating system's credential vault:
+
+### Windows Credential Manager
 
 ```powershell
-Push-Location $configDir
-eboekhouden-mcp --check-config
-Pop-Location
-(Get-Command eboekhouden-mcp).Source
+# Store token securely in Windows Credential Manager
+python -c "import keyring; keyring.set_password('eboekhouden_mcp', 'secret_token', 'your-secret-api-token-here')"
 ```
 
-Use the printed absolute executable path in your MCP client. GUI apps often do
-not inherit the same `PATH` as a terminal.
+### macOS Keychain
 
-## Connect an AI assistant
+```bash
+# Store token securely in macOS Keychain
+python3 -c "import keyring; keyring.set_password('eboekhouden_mcp', 'secret_token', 'your-secret-api-token-here')"
+```
 
-The common stdio definition works in Claude Desktop, Cursor, Windsurf, and
-Gemini CLI. Replace both paths with absolute paths:
+When configured, the MCP server automatically resolves the token on startup without requiring `EBOEKHOUDEN_MCP_SECRET_TOKEN` in the environment.
+
+---
+
+## Configuration
+
+Settings are configured via environment variables or a `.env` file in the working directory:
+
+| Environment Variable | Required | Default | Description |
+|---|:---:|:---:|---|
+| `EBOEKHOUDEN_MCP_SECRET_TOKEN` | Yes* | — | e-Boekhouden REST API token (*Optional if stored in Keyring) |
+| `EBOEKHOUDEN_MCP_ENABLE_WRITE_TOOLS` | No | `false` | Expose create, update, and delete tools |
+| `EBOEKHOUDEN_MCP_REQUIRE_BIOMETRIC` | No | `true` | Enforce native Windows Hello / Touch ID biometric challenge on writes |
+| `EBOEKHOUDEN_MCP_KEYRING_SERVICE` | No | `eboekhouden_mcp` | Service name used for OS Keyring lookup |
+| `EBOEKHOUDEN_MCP_ENABLE_WEB_SESSION` | No | `false` | Enable web session bridge tools (bank import grid, attachment linking) |
+| `EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN` | No | — | Session authentication token for web session endpoints |
+| `EBOEKHOUDEN_MCP_WEB_SESSION_BASE_URL` | No | `https://secure20.e-boekhouden.nl` | Base URL for internal web session requests |
+| `EBOEKHOUDEN_MCP_API_URL` | No | `https://api.e-boekhouden.nl/` | Official e-Boekhouden REST API endpoint |
+| `EBOEKHOUDEN_MCP_ALLOW_CUSTOM_API_URL` | No | `false` | Restrict connections strictly to official API host unless set to `true` |
+| `EBOEKHOUDEN_MCP_SOURCE` | No | `MCP-Server` | Source identifier logged with API requests |
+| `EBOEKHOUDEN_MCP_LOG_LEVEL` | No | `WARNING` | Diagnostics level logged to stderr (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `EBOEKHOUDEN_MCP_ENABLE_ARCHIVE_TOOL` | No | `false` | Enable Microsoft Graph digital archive mailbox delivery |
+| `EBOEKHOUDEN_MCP_ARCHIVE_ROOT` | Archive only | — | Local directory path allowlisted for archive reading |
+
+---
+
+## AI Client Configuration
+
+### Antigravity & Gemini CLI
+
+Add to your `mcp_config.json` (e.g. `~/.gemini/config/mcp_config.json`):
 
 ```json
 {
   "mcpServers": {
     "eboekhouden": {
-      "command": "/absolute/path/to/eboekhouden-mcp",
-      "args": [],
-      "cwd": "/absolute/path/to/.config/eboekhouden-mcp"
+      "command": "/path/to/eboekhouden-mcp/.venv/Scripts/eboekhouden-mcp.exe",
+      "args": []
     }
   }
 }
 ```
 
-| Assistant | Put the server definition here |
-|---|---|
-| **Claude Desktop** | Developer settings, or `claude_desktop_config.json` |
-| **Claude Code** | `claude mcp add-json --scope user ...` |
-| **ChatGPT desktop / Codex app** | `~/.codex/config.toml` |
-| **Codex CLI / IDE extension** | `~/.codex/config.toml` |
-| **Cursor** | `~/.cursor/mcp.json` |
-| **VS Code + GitHub Copilot** | User or workspace `mcp.json` |
-| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
-| **Gemini CLI** | `~/.gemini/settings.json` |
+Or via Python module:
+
+```json
+{
+  "mcpServers": {
+    "eboekhouden": {
+      "command": "/path/to/eboekhouden-mcp/.venv/Scripts/python.exe",
+      "args": ["-m", "eboekhouden_mcp.server"]
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+Add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "eboekhouden": {
+      "command": "/path/to/eboekhouden-mcp/.venv/bin/eboekhouden-mcp",
+      "args": [],
+      "env": {
+        "EBOEKHOUDEN_MCP_ENABLE_WRITE_TOOLS": "false",
+        "EBOEKHOUDEN_MCP_REQUIRE_BIOMETRIC": "true"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to `.cursor/mcp.json` or Global MCP Settings:
+
+```json
+{
+  "mcpServers": {
+    "eboekhouden": {
+      "command": "python",
+      "args": ["-m", "eboekhouden_mcp.server"],
+      "env": {
+        "EBOEKHOUDEN_MCP_ENABLE_WRITE_TOOLS": "true",
+        "EBOEKHOUDEN_MCP_REQUIRE_BIOMETRIC": "true"
+      }
+    }
+  }
+}
+```
 
 ### Claude Code
 
 ```bash
 claude mcp add-json --scope user eboekhouden \
-  '{"type":"stdio","command":"/absolute/path/to/eboekhouden-mcp","args":[],"cwd":"/absolute/path/to/.config/eboekhouden-mcp"}'
-claude mcp list
+  '{"type":"stdio","command":"/path/to/eboekhouden-mcp/.venv/bin/eboekhouden-mcp","args":[]}'
 ```
 
-### ChatGPT desktop and Codex
+---
 
-The ChatGPT desktop app, Codex app, CLI, and IDE extension use Codex
-`config.toml`. Add:
+## Quick Start
 
-```toml
-[mcp_servers.eboekhouden]
-command = "/absolute/path/to/eboekhouden-mcp"
-cwd = "/absolute/path/to/.config/eboekhouden-mcp"
-```
+### 1. Installation
 
-Restart the app or extension. In the CLI, run `codex mcp list` or open `/mcp`.
-ChatGPT on the web cannot launch a local stdio process; this repository does not
-ship a remote multi-user deployment.
-
-### VS Code with GitHub Copilot
-
-Run **MCP: Open User Configuration** and use `envFile` so the token stays out of
-`mcp.json`:
-
-```json
-{
-  "servers": {
-    "eboekhouden": {
-      "type": "stdio",
-      "command": "/absolute/path/to/eboekhouden-mcp",
-      "args": [],
-      "envFile": "/absolute/path/to/.config/eboekhouden-mcp/.env"
-    }
-  }
-}
-```
-
-The complete client-by-client guide, exact file locations, Windows notes, and
-troubleshooting live in **[AI assistant integrations](docs/integrations.md)**.
-
-## Safety model
-
-```mermaid
-flowchart LR
-    U[You] -->|approve| A[AI assistant]
-    A <-->|local stdio| M[e-Boekhouden MCP]
-    M -->|HTTPS + short-lived session| E[Official e-Boekhouden API]
-    K[Private .env] --> M
-    M -. writes hidden by default .-> W[Create / update / delete]
-```
-
-- The secret is loaded from your process environment or a private `.env`.
-- Config errors and representations do not print the token.
-- API sessions are refreshed safely and serialized across concurrent calls.
-- Tool schemas reject unknown properties and enforce official API bounds.
-- MCP annotations identify read-only and destructive operations.
-- The optional archive sender is separately disabled, path-allowlisted, and
-  limited to common PDF/image files up to 3 MiB.
-- Tool results contain financial data and are visible to the AI client you
-  chose. Review that client's data and privacy terms.
-
-Read the full [security model and threat boundaries](docs/security.md). Report
-vulnerabilities through a [private GitHub security advisory](SECURITY.md), never
-through a public issue.
-
-## Configuration
-
-The server reads environment variables and a `.env` in its working directory.
-
-| Variable | Required | Default | Purpose |
-|---|---:|---|---|
-| `EBOEKHOUDEN_MCP_SECRET_TOKEN` | yes | - | Your e-Boekhouden API token |
-| `EBOEKHOUDEN_MCP_ENABLE_WRITE_TOOLS` | no | `false` | Expose create, update, and delete tools |
-| `EBOEKHOUDEN_MCP_API_URL` | no | official API | API base URL |
-| `EBOEKHOUDEN_MCP_ALLOW_CUSTOM_API_URL` | no | `false` | Allow a trusted custom HTTPS API host |
-| `EBOEKHOUDEN_MCP_SOURCE` | no | `MCP-Server` | Short API session source label |
-| `EBOEKHOUDEN_MCP_LOG_LEVEL` | no | `WARNING` | Diagnostics written to stderr |
-| `EBOEKHOUDEN_MCP_ENABLE_ARCHIVE_TOOL` | no | `false` | Expose Microsoft Graph archive delivery |
-| `EBOEKHOUDEN_MCP_ARCHIVE_ROOT` | archive only | - | Directory the archive tool may read |
-
-See [`.env.example`](.env.example) for every optional archive variable.
-
-### Opt in to writes
-
-Add the following to the private `.env` and restart the MCP client:
-
-```env
-EBOEKHOUDEN_MCP_ENABLE_WRITE_TOOLS=true
-```
-
-Write tools remain guarded by a required `confirm: true` argument. Before
-approving, verify the administration, identifiers, dates, monetary values, and
-exact action. Invoices and mutations may be irreversible in normal accounting
-workflows even when they are not delete operations.
-
-Digital archive delivery requires both write flags, an archive root, and your
-own Microsoft Graph application. See [archive setup](docs/integrations.md#optional-digital-archive-delivery).
-
-## Tools
-
-**34 read tools, enabled by default**
-
-- Search and batch detail across relations, mutations, and invoices
-- Trial balance, profit and loss, balance sheet, VAT summary, AR/AP aging, and
-  ledger transactions
-- Relations, invoices, mutations, products, ledgers, cost centers, members,
-  administrations, templates, units, and outstanding invoices
-
-**15 write tools, hidden by default**
-
-- Create, update, and delete supported accounting records
-- Create invoices and mutations
-- Optionally send a document to the digital archive mailbox
-
-See the [complete tool catalog](docs/tools.md) for every tool name, category,
-guard, and output behavior.
-
-## Architecture
-
-```text
-AI client
-  └─ MCP stdio + JSON-RPC
-      └─ eboekhouden_mcp (tool registry, policy, validation)
-          └─ eboekhouden (bundled typed API client)
-              └─ https://api.e-boekhouden.nl/v1/
-```
-
-The bundled client is implementation support for this standalone package. No
-second repository is required at install or runtime.
-
-## Development
+Requires Python 3.10+ and [`uv`](https://docs.astral.sh/uv/) or standard virtual environments:
 
 ```bash
+# Clone the repository
 git clone https://github.com/matisup10/e-Boekhouden-MCP.git
 cd e-Boekhouden-MCP
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-make check
+
+# Create virtual environment and install dependencies
+uv venv
+source .venv/bin/activate    # On Windows: .\.venv\Scripts\Activate.ps1
+uv pip install -e ".[dev]"
 ```
 
-`make check` runs formatting checks, linting, mypy, Bandit, the mocked test suite
-with branch coverage, and package validation. Tests never need real credentials.
-See [development and architecture](docs/development.md) and
-[CONTRIBUTING.md](CONTRIBUTING.md).
+### 2. Configure Token
+
+Using Keyring (Recommended):
+
+```bash
+python -c "import keyring; keyring.set_password('eboekhouden_mcp', 'secret_token', 'your-token-here')"
+```
+
+Or copy `.env.example` to `.env`:
+
+```bash
+cp .env.example .env
+# Edit .env and supply your EBOEKHOUDEN_MCP_SECRET_TOKEN
+```
+
+### 3. Verify Configuration
+
+```bash
+eboekhouden-mcp --check-config
+```
+
+### 4. Run the Test Suite
+
+```bash
+pytest --cov
+```
+
+All 144 unit and integration tests run fully mocked without contacting live API endpoints or requiring production secrets.
+
+---
+
+## Credits & Attribution
+
+This project is built upon the open-source innovations of the Dutch accounting and MCP developer communities. Special recognition and attribution go to:
+
+### 1. [`matisup10/e-Boekhouden-MCP`](https://github.com/matisup10/e-Boekhouden-MCP)
+- **Author**: matisup10 and contributors (MIT License)
+- **Foundational Architecture**:
+  - 49-tool core REST v1 MCP server architecture and tool schemas.
+  - Robust e-Boekhouden REST API client with full Pydantic v2 domain models.
+  - High-performance batch hydration, compact search algorithms, and financial report aggregators (Trial Balance, P&L, VAT summary, AR/AP aging).
+  - Explicit `confirm: true` write-action security pattern.
+
+### 2. [`JoooostB/speedy-eboekhouden`](https://github.com/JoooostB/speedy-eboekhouden)
+- **Author**: Joost and contributors (MIT License)
+- **Foundational Accounting Logic & Session Schemas**:
+  - Authoritative Dutch bookkeeping domain heuristics and structured OCR prompt engineering.
+  - Dutch VAT decision tree (EU VAT Directive Art. 226 reverse-charge, Art. 38 EV charging, KIA investment allowances, 80% representation limits).
+  - Receipt (*bonnetje*) detection heuristics and automatic ledger cross-referencing.
+  - Reverse-engineered internal web session API schemas for bank import statements and `/folderkoppel` attachment linking.
+
+See the [`NOTICE`](NOTICE) and [`LICENSE`](LICENSE) files for complete license texts and third-party copyright notices.
+
+---
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Released under the **[MIT License](LICENSE)**.
