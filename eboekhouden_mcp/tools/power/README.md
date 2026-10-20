@@ -13,6 +13,7 @@ wired in with a single call:
 
 ```python
 from eboekhouden_mcp.tools.power import register_power_tools
+
 register_power_tools(registry)
 ```
 

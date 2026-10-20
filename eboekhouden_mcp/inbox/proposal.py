@@ -11,7 +11,6 @@ from eboekhouden_mcp.inbox.models import (
     BookingLine,
     BookingProposal,
     ExtractedInvoiceData,
-    TaxAdviceTip,
 )
 
 VALID_PURCHASE_VAT_CODES = {
@@ -149,7 +148,9 @@ def find_ledger_account(
 
     for ledger in ledgers:
         cat = str(ledger.get("category") or "").upper()
-        if cat in ("VW", "PROFIT_LOSS") or str(ledger.get("code") or "").startswith("4"):
+        if cat in ("VW", "PROFIT_LOSS") or str(ledger.get("code") or "").startswith(
+            "4"
+        ):
             return ledger, False
 
     return ledgers[0], False
@@ -239,7 +240,9 @@ def generate_booking_proposal(
         invoice_data.grootboekcode, ledgers
     )
     if not matched_ledger:
-        validation_errors.append("Geen geschikte grootboekrekening gevonden in de administratie.")
+        validation_errors.append(
+            "Geen geschikte grootboekrekening gevonden in de administratie."
+        )
         cost_ledger_id = 4500
         cost_ledger_code = "4500"
     else:
@@ -317,7 +320,9 @@ def generate_booking_proposal(
         amount=line_amount,
         vat_amount=vat_amount if vat_amount > 0 else None,
         cost_center_id=cost_center_id,
-        description=invoice_data.omschrijving[:200] if invoice_data.omschrijving else clean_desc,
+        description=invoice_data.omschrijving[:200]
+        if invoice_data.omschrijving
+        else clean_desc,
     )
 
     # 8. Construct API Payload
@@ -447,7 +452,17 @@ def suggest_bank_transaction_classification(
     else:
         # Money spent (negative amount)
         # Bank costs
-        if any(w in desc_lower for w in ("kosten betalingsverkeer", "bankkosten", "abonnementskosten abn", "ing bank", "rabobank pas", "bunq")):
+        if any(
+            w in desc_lower
+            for w in (
+                "kosten betalingsverkeer",
+                "bankkosten",
+                "abonnementskosten abn",
+                "ing bank",
+                "rabobank pas",
+                "bunq",
+            )
+        ):
             grootboekcode = "4500"
             btw_code = "GEEN"
             soort = "GeldUitgegeven"
@@ -455,7 +470,15 @@ def suggest_bank_transaction_classification(
             reasoning = "Bankkosten zijn vrijgesteld van BTW"
             confidence = 0.95
         # Tax authorities / Belastingdienst
-        elif any(w in desc_lower for w in ("belastingdienst", "omzetbelasting", "loonheffing", "motorrijtuigenbelasting")):
+        elif any(
+            w in desc_lower
+            for w in (
+                "belastingdienst",
+                "omzetbelasting",
+                "loonheffing",
+                "motorrijtuigenbelasting",
+            )
+        ):
             grootboekcode = "4500"
             btw_code = "GEEN"
             soort = "GeldUitgegeven"
@@ -463,7 +486,23 @@ def suggest_bank_transaction_classification(
             reasoning = "Belastingbetalingen hebben geen aftrekbare BTW"
             confidence = 0.95
         # Vehicle / Travel / Fuel / Public Transit
-        elif any(w in desc_lower for w in ("shell", "esso", "bp ", "total ", "fastned", "tankstation", "brandstof", "q-park", "parkeren", "ns-reizigers", "ns reizigers", "uber")):
+        elif any(
+            w in desc_lower
+            for w in (
+                "shell",
+                "esso",
+                "bp ",
+                "total ",
+                "fastned",
+                "tankstation",
+                "brandstof",
+                "q-park",
+                "parkeren",
+                "ns-reizigers",
+                "ns reizigers",
+                "uber",
+            )
+        ):
             grootboekcode = "4300"
             btw_code = "LAAG_INK_9" if "ns" in desc_lower else "HOOG_INK_21"
             soort = "GeldUitgegeven"
@@ -471,7 +510,21 @@ def suggest_bank_transaction_classification(
             reasoning = "Vervoers- en brandstofkosten"
             confidence = 0.90
         # Software / SaaS
-        elif any(w in desc_lower for w in ("github", "google", "aws", "microsoft", "openai", "slack", "notion", "adobe", "hosting", "transip")):
+        elif any(
+            w in desc_lower
+            for w in (
+                "github",
+                "google",
+                "aws",
+                "microsoft",
+                "openai",
+                "slack",
+                "notion",
+                "adobe",
+                "hosting",
+                "transip",
+            )
+        ):
             grootboekcode = "4100"
             btw_code = "HOOG_INK_21"
             soort = "GeldUitgegeven"
@@ -479,7 +532,19 @@ def suggest_bank_transaction_classification(
             reasoning = "Software / SaaS kantoorkosten"
             confidence = 0.88
         # Housing / Utilities
-        elif any(w in desc_lower for w in ("kpn", "vodafone", "ziggo", "eneco", "vattenfall", "essent", "waternet", "huur ")):
+        elif any(
+            w in desc_lower
+            for w in (
+                "kpn",
+                "vodafone",
+                "ziggo",
+                "eneco",
+                "vattenfall",
+                "essent",
+                "waternet",
+                "huur ",
+            )
+        ):
             grootboekcode = "4200"
             btw_code = "HOOG_INK_21"
             soort = "GeldUitgegeven"
@@ -487,7 +552,10 @@ def suggest_bank_transaction_classification(
             reasoning = "Huisvestings-, telecom- of energiekosten"
             confidence = 0.85
         # Horeca / Catering
-        elif any(w in desc_lower for w in ("restaurant", "cafe", "lunch", "koffie", "snackbar", "bakker")):
+        elif any(
+            w in desc_lower
+            for w in ("restaurant", "cafe", "lunch", "koffie", "snackbar", "bakker")
+        ):
             grootboekcode = "4400"
             btw_code = "LAAG_INK_9"
             soort = "GeldUitgegeven"
@@ -503,7 +571,9 @@ def suggest_bank_transaction_classification(
             reasoning = "Salarisbetaling (geen BTW)"
             confidence = 0.90
         # Creditor payment reference
-        elif any(w in desc_lower for w in ("factuur", "inv-", "factuurnummer", "declaratie")):
+        elif any(
+            w in desc_lower for w in ("factuur", "inv-", "factuurnummer", "declaratie")
+        ):
             soort = "FactuurbetalingVerstuurd"
             mutation_type = "4"
             grootboekcode = "1600"
@@ -520,10 +590,10 @@ def suggest_bank_transaction_classification(
 
     # Resolve ledger ID from ledgers if available
     ledger_id: int | None = None
-    for l in ledgers:
-        code = str(l.get("code") or "").strip()
+    for ledger in ledgers:
+        code = str(ledger.get("code") or "").strip()
         if code == grootboekcode or code.zfill(4) == grootboekcode.zfill(4):
-            ledger_id = int(l["id"])
+            ledger_id = int(ledger["id"])
             break
 
     return BankTransactionSuggestion(

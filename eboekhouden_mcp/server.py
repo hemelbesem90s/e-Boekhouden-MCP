@@ -77,7 +77,9 @@ class EBoekhoudenMCPServer:
             )
             for tool_name in WEB_SESSION_TOOL_NAMES:
                 registered_tool = self.registry.get(tool_name)
-                if registered_tool is not None and hasattr(registered_tool, "set_client"):
+                if registered_tool is not None and hasattr(
+                    registered_tool, "set_client"
+                ):
                     registered_tool.set_client(web_client)
 
         # Create SDK config

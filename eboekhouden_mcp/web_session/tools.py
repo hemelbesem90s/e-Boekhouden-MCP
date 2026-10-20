@@ -17,7 +17,9 @@ if TYPE_CHECKING:
     from eboekhouden import EBoekhoudenClient
 
 
-def _resolve_web_client(client_override: WebSessionClient | None = None) -> WebSessionClient:
+def _resolve_web_client(
+    client_override: WebSessionClient | None = None,
+) -> WebSessionClient:
     """Resolve an active WebSessionClient using injection or environment token."""
     if client_override is not None:
         return client_override
@@ -39,8 +41,12 @@ def _resolve_web_client(client_override: WebSessionClient | None = None) -> WebS
 class GetUnprocessedBankTransactionsInput(ToolSchema):
     """Input schema for get_unprocessed_bank_transactions."""
 
-    offset: int = Field(default=0, ge=0, description="Offset for pagination (0 or greater)")
-    limit: int = Field(default=50, ge=1, le=500, description="Maximum items to return (1-500)")
+    offset: int = Field(
+        default=0, ge=0, description="Offset for pagination (0 or greater)"
+    )
+    limit: int = Field(
+        default=50, ge=1, le=500, description="Maximum items to return (1-500)"
+    )
 
 
 class GetUnprocessedBankTransactionsTool(BaseTool):
@@ -79,8 +85,12 @@ class SuggestMutationForBankStatementInput(ToolSchema):
         description="Transaction amount (negative for money sent/debit, positive for money received/credit)"
     )
     mut_omschrijving: str = Field(description="Transaction description text")
-    mut_factuur: str | None = Field(default="", description="Invoice number reference if known")
-    grootboek_id: int | None = Field(default=0, description="Bank ledger account ID if known")
+    mut_factuur: str | None = Field(
+        default="", description="Invoice number reference if known"
+    )
+    grootboek_id: int | None = Field(
+        default=0, description="Bank ledger account ID if known"
+    )
 
 
 class SuggestMutationForBankStatementTool(BaseTool):
@@ -119,7 +129,9 @@ class SuggestMutationForBankStatementTool(BaseTool):
 class AttachFileToMutationInput(ToolSchema):
     """Input schema for attach_file_to_mutation."""
 
-    mutation_id: int = Field(ge=1, description="ID (mutatie nummer) of the mutation to link")
+    mutation_id: int = Field(
+        ge=1, description="ID (mutatie nummer) of the mutation to link"
+    )
     file_id: int = Field(ge=1, description="Archive file ID in the digital archive")
 
 
@@ -388,7 +400,9 @@ class MoveArchiveFilesTool(BaseTool):
 class CreateArchiveFolderInput(ToolSchema):
     """Input schema for create_archive_folder."""
 
-    name: str = Field(min_length=1, description="Name of the new Digital Archive folder")
+    name: str = Field(
+        min_length=1, description="Name of the new Digital Archive folder"
+    )
     parent_folder_id: int = Field(
         default=0, ge=0, description="Parent folder ID (default 0 for root)"
     )
@@ -538,6 +552,3 @@ class DeleteWebMutationsTool(BaseTool):
             "success": True,
             **result,
         }
-
-
-

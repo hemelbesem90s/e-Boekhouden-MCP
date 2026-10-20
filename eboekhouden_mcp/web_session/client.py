@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import base64
 import copy
-import json
-import random
+import secrets
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -29,7 +28,10 @@ def _validate_local_file_path(file_path: str | Path) -> Path:
     """Enforce fail-closed local file access (reject cloud drives / UNC paths)."""
     raw_str = str(file_path).strip()
     lower_str = raw_str.lower()
-    if any(lower_str.startswith(prefix) for prefix in CLOUD_PATH_PREFIXES) or "shared drives" in lower_str:
+    if (
+        any(lower_str.startswith(prefix) for prefix in CLOUD_PATH_PREFIXES)
+        or "shared drives" in lower_str
+    ):
         raise ValueError(
             f"Refusing to read binary file from cloud/network path '{raw_str}'. "
             "Copy or stage the file in a local directory (e.g. C:\\Temp\\ or scratch/) first."
@@ -53,7 +55,7 @@ def normalize_web_mutation_payload(
         if mutatie.get("nr") in (0, None, ""):
             mutatie.pop("nr", None)
         if not normalized.get("folderKoppelId"):
-            normalized["folderKoppelId"] = -random.randint(1, 1_000_000_000)
+            normalized["folderKoppelId"] = -(secrets.randbelow(1_000_000_000) + 1)
     else:
         if not normalized.get("folderKoppelId") and mutatie.get("nr"):
             normalized["folderKoppelId"] = mutatie["nr"]
@@ -178,14 +180,18 @@ class WebSessionClient:
         """Validate response status and detect session expiration or upstream error envelopes."""
         body = response.text
         if response.status_code == 401:
-            raise SessionExpiredError("e-Boekhouden web session expired or unauthorized")
+            raise SessionExpiredError(
+                "e-Boekhouden web session expired or unauthorized"
+            )
 
         if (
             "SECURITY_010" in body
             or "Niet ingelogd" in body
             or '"errorType":"security"' in body
         ):
-            raise SessionExpiredError("e-Boekhouden session expired (SECURITY_010 / Niet ingelogd)")
+            raise SessionExpiredError(
+                "e-Boekhouden session expired (SECURITY_010 / Niet ingelogd)"
+            )
 
         if response.status_code not in (200, 201):
             raise WebSessionError(
@@ -198,13 +204,17 @@ class WebSessionClient:
         try:
             data = response.json()
         except Exception as exc:
-            raise WebSessionError(f"Failed to parse JSON response: {body[:200]}") from exc
+            raise WebSessionError(
+                f"Failed to parse JSON response: {body[:200]}"
+            ) from exc
 
         if isinstance(data, dict):
             error_type = data.get("errorType")
             if error_type:
                 if error_type == "security":
-                    raise SessionExpiredError(f"Security error: {data.get('message', 'session invalid')}")
+                    raise SessionExpiredError(
+                        f"Security error: {data.get('message', 'session invalid')}"
+                    )
                 msg = data.get("message") or data.get("code") or error_type
                 raise WebSessionError(f"e-Boekhouden: {msg}")
 
@@ -396,7 +406,11 @@ class WebSessionClient:
                 grid_data = self._check_response(resp)
                 rows = grid_data.get("data", []) if isinstance(grid_data, dict) else []
                 for row in rows:
-                    if isinstance(row, list) and len(row) >= 2 and str(row[1]) == str(nr):
+                    if (
+                        isinstance(row, list)
+                        and len(row) >= 2
+                        and str(row[1]) == str(nr)
+                    ):
                         internal_ids.append(int(row[0]))
                         resolved_map[int(nr)] = int(row[0])
                         break
@@ -419,7 +433,9 @@ class WebSessionClient:
 
     # ---------------- Async Methods ---------------- #
 
-    async def async_get_import_grid(self, offset: int = 0, limit: int = 50) -> dict[str, Any]:
+    async def async_get_import_grid(
+        self, offset: int = 0, limit: int = 50
+    ) -> dict[str, Any]:
         """Async version of get_import_grid."""
         url = f"{self.base_url}/v1/api/import/gridtable?offset={offset}&limit={limit}&orderBy=&sortDirection=1"
         if self._async_http is not None:
@@ -444,7 +460,9 @@ class WebSessionClient:
                 "raw": raw,
             }
 
-    async def async_get_mutatie_by_afschrift(self, params: dict[str, Any]) -> dict[str, Any]:
+    async def async_get_mutatie_by_afschrift(
+        self, params: dict[str, Any]
+    ) -> dict[str, Any]:
         """Async version of get_mutatie_by_afschrift."""
         query_str = urlencode({k: str(v) for k, v in params.items()})
         url = f"{self.base_url}/v1/api/mutatie/getmutatiebyafschrift?{query_str}"
@@ -460,7 +478,9 @@ class WebSessionClient:
             resp = await client.get(url)
             return self._check_response(resp)
 
-    async def async_link_file_to_mutation(self, mutation_id: int, file_id: int) -> dict[str, Any]:
+    async def async_link_file_to_mutation(
+        self, mutation_id: int, file_id: int
+    ) -> dict[str, Any]:
         """Async version of link_file_to_mutation."""
         url = f"{self.base_url}/v1/api/folderkoppel/koppel/item"
         payload = {
@@ -469,7 +489,9 @@ class WebSessionClient:
             "koppelType": "MUT",
         }
         if self._async_http is not None:
-            resp = await self._async_http.post(url, json=payload, headers=self._get_headers())
+            resp = await self._async_http.post(
+                url, json=payload, headers=self._get_headers()
+            )
             return self._check_response(resp)
 
         async with httpx.AsyncClient(
@@ -550,9 +572,13 @@ class WebSessionClient:
         normalized = normalize_web_mutation_payload(payload, is_update=is_update)
         if self._async_http is not None:
             if is_update:
-                resp = await self._async_http.put(url, json=normalized, headers=self._get_headers())
+                resp = await self._async_http.put(
+                    url, json=normalized, headers=self._get_headers()
+                )
             else:
-                resp = await self._async_http.post(url, json=normalized, headers=self._get_headers())
+                resp = await self._async_http.post(
+                    url, json=normalized, headers=self._get_headers()
+                )
             return self._check_response(resp)
 
         async with httpx.AsyncClient(
@@ -644,7 +670,9 @@ class WebSessionClient:
         grid_url = f"{self.base_url}/v1/api/mutatie/gridtable"
         del_url = f"{self.base_url}/v1/api/mutatie/bulk/delete"
 
-        async def _execute_delete(client_obj: httpx.AsyncClient, use_headers: bool) -> dict[str, Any]:
+        async def _execute_delete(
+            client_obj: httpx.AsyncClient, use_headers: bool
+        ) -> dict[str, Any]:
             hdrs = self._get_headers() if use_headers else None
             internal_ids: list[int] = []
             resolved_map: dict[int, int] = {}
@@ -655,7 +683,11 @@ class WebSessionClient:
                 grid_data = self._check_response(resp)
                 rows = grid_data.get("data", []) if isinstance(grid_data, dict) else []
                 for row in rows:
-                    if isinstance(row, list) and len(row) >= 2 and str(row[1]) == str(nr):
+                    if (
+                        isinstance(row, list)
+                        and len(row) >= 2
+                        and str(row[1]) == str(nr)
+                    ):
                         internal_ids.append(int(row[0]))
                         resolved_map[int(nr)] = int(row[0])
                         break
@@ -680,4 +712,3 @@ class WebSessionClient:
             timeout=self.timeout,
         ) as client:
             return await _execute_delete(client, use_headers=False)
-

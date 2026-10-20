@@ -108,7 +108,18 @@ class TestRegisterAllTools:
         side_effect_tools = {
             tool.name
             for tool in registry.list_tools()
-            if tool.name.startswith(("create_", "update_", "delete_", "send_", "attach_", "save_", "move_", "upload_"))
+            if tool.name.startswith(
+                (
+                    "create_",
+                    "update_",
+                    "delete_",
+                    "send_",
+                    "attach_",
+                    "save_",
+                    "move_",
+                    "upload_",
+                )
+            )
         }
 
         assert side_effect_tools == WRITE_TOOL_NAMES

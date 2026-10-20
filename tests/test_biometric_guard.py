@@ -35,7 +35,10 @@ def test_format_write_prompt_invoice_with_explicit_amount():
         "create_invoice",
         {"amount": 1210.0, "relation_id": 42},
     )
-    assert prompt == "e-Boekhouden MCP: Approve POST Invoice for EUR 1,210.00 to Relation 42?"
+    assert (
+        prompt
+        == "e-Boekhouden MCP: Approve POST Invoice for EUR 1,210.00 to Relation 42?"
+    )
 
 
 def test_format_write_prompt_invoice_computed_from_items():
@@ -44,12 +47,19 @@ def test_format_write_prompt_invoice_computed_from_items():
         {
             "relation_id": 10,
             "items": [
-                {"description": "Consulting", "quantity": 10.0, "price_per_unit": 100.0},
+                {
+                    "description": "Consulting",
+                    "quantity": 10.0,
+                    "price_per_unit": 100.0,
+                },
                 {"description": "VAT", "quantity": 1.0, "price_per_unit": 210.0},
             ],
         },
     )
-    assert prompt == "e-Boekhouden MCP: Approve POST Invoice for EUR 1,210.00 to Relation 10?"
+    assert (
+        prompt
+        == "e-Boekhouden MCP: Approve POST Invoice for EUR 1,210.00 to Relation 10?"
+    )
 
 
 def test_format_write_prompt_invoice_without_amount():
@@ -67,7 +77,10 @@ def test_format_write_prompt_mutation_with_explicit_amount():
         "create_mutation",
         {"amount": 500.5, "ledger_id": 1000},
     )
-    assert prompt == "e-Boekhouden MCP: Approve POST Mutation of EUR 500.50 on Ledger 1000?"
+    assert (
+        prompt
+        == "e-Boekhouden MCP: Approve POST Mutation of EUR 500.50 on Ledger 1000?"
+    )
 
 
 def test_format_write_prompt_mutation_computed_from_rows():
@@ -81,7 +94,10 @@ def test_format_write_prompt_mutation_computed_from_rows():
             ],
         },
     )
-    assert prompt == "e-Boekhouden MCP: Approve POST Mutation of EUR 200.00 on Ledger 2000?"
+    assert (
+        prompt
+        == "e-Boekhouden MCP: Approve POST Mutation of EUR 200.00 on Ledger 2000?"
+    )
 
 
 def test_format_write_prompt_mutation_from_json_rows():
@@ -92,7 +108,9 @@ def test_format_write_prompt_mutation_from_json_rows():
             "rows_json": '[{"amount": 75.25, "vat_code": "GEEN"}]',
         },
     )
-    assert prompt == "e-Boekhouden MCP: Approve POST Mutation of EUR 75.25 on Ledger 3000?"
+    assert (
+        prompt == "e-Boekhouden MCP: Approve POST Mutation of EUR 75.25 on Ledger 3000?"
+    )
 
 
 def test_format_write_prompt_mutation_without_amount():
@@ -144,7 +162,9 @@ def _mock_proc(stdout: str = "", stderr: str = "", returncode: int = 0) -> Magic
 
 
 def test_verify_windows_success():
-    with patch("subprocess.run", return_value=_mock_proc(stdout="VerificationSucceeded")):
+    with patch(
+        "subprocess.run", return_value=_mock_proc(stdout="VerificationSucceeded")
+    ):
         assert verify_windows("Test prompt") is True
 
     with patch("subprocess.run", return_value=_mock_proc(stdout="Verified")):
@@ -152,55 +172,68 @@ def test_verify_windows_success():
 
 
 def test_verify_windows_canceled_or_exhausted():
-    with patch("subprocess.run", return_value=_mock_proc(stdout="Canceled")), pytest.raises(
-        BiometricVerificationDenied, match="canceled or failed"
+    with (
+        patch("subprocess.run", return_value=_mock_proc(stdout="Canceled")),
+        pytest.raises(BiometricVerificationDenied, match="canceled or failed"),
     ):
         verify_windows("Test prompt")
 
-    with patch("subprocess.run", return_value=_mock_proc(stdout="RetriesExhausted")), pytest.raises(
-        BiometricVerificationDenied, match="canceled or failed"
+    with (
+        patch("subprocess.run", return_value=_mock_proc(stdout="RetriesExhausted")),
+        pytest.raises(BiometricVerificationDenied, match="canceled or failed"),
     ):
         verify_windows("Test prompt")
 
 
 def test_verify_windows_hardware_unavailable():
     for status in ("DeviceNotPresent", "NotConfiguredForUser", "DisabledByPolicy"):
-        with patch("subprocess.run", return_value=_mock_proc(stdout=status)), pytest.raises(
-            BiometricHardwareUnavailable, match=status
+        with (
+            patch("subprocess.run", return_value=_mock_proc(stdout=status)),
+            pytest.raises(BiometricHardwareUnavailable, match=status),
         ):
             verify_windows("Test prompt")
 
-    with patch("subprocess.run", return_value=_mock_proc(stdout="DeviceBusy")), pytest.raises(
-        BiometricHardwareUnavailable, match="currently busy"
+    with (
+        patch("subprocess.run", return_value=_mock_proc(stdout="DeviceBusy")),
+        pytest.raises(BiometricHardwareUnavailable, match="currently busy"),
     ):
         verify_windows("Test prompt")
 
 
 def test_verify_windows_unexpected_output_fails_closed():
-    with patch("subprocess.run", return_value=_mock_proc(stdout="UnknownErrorState")), pytest.raises(
-        BiometricVerificationDenied, match="UnknownErrorState"
+    with (
+        patch("subprocess.run", return_value=_mock_proc(stdout="UnknownErrorState")),
+        pytest.raises(BiometricVerificationDenied, match="UnknownErrorState"),
     ):
         verify_windows("Test prompt")
 
 
 def test_verify_windows_timeout():
-    with patch(
-        "subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="powershell", timeout=5)
-    ), pytest.raises(BiometricVerificationDenied, match="timed out"):
+    with (
+        patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="powershell", timeout=5),
+        ),
+        pytest.raises(BiometricVerificationDenied, match="timed out"),
+    ):
         verify_windows("Test prompt", timeout_seconds=5)
 
 
 def test_verify_windows_powershell_error():
-    with patch(
-        "subprocess.run",
-        return_value=_mock_proc(stderr="Script execution blocked", returncode=1),
-    ), pytest.raises(BiometricHardwareUnavailable, match="Script execution blocked"):
+    with (
+        patch(
+            "subprocess.run",
+            return_value=_mock_proc(stderr="Script execution blocked", returncode=1),
+        ),
+        pytest.raises(BiometricHardwareUnavailable, match="Script execution blocked"),
+    ):
         verify_windows("Test prompt")
 
 
 def test_verify_windows_powershell_not_found():
-    with patch("subprocess.run", side_effect=FileNotFoundError("No powershell")), pytest.raises(
-        BiometricHardwareUnavailable, match="not found"
+    with (
+        patch("subprocess.run", side_effect=FileNotFoundError("No powershell")),
+        pytest.raises(BiometricHardwareUnavailable, match="not found"),
     ):
         verify_windows("Test prompt")
 
@@ -228,56 +261,70 @@ def test_verify_windows_topmost_presence_invocation():
 
 
 def test_verify_macos_swift_success():
-    with patch("shutil.which", return_value="/usr/bin/swift"), patch(
-        "subprocess.run", return_value=_mock_proc(returncode=0)
+    with (
+        patch("shutil.which", return_value="/usr/bin/swift"),
+        patch("subprocess.run", return_value=_mock_proc(returncode=0)),
     ):
         assert verify_macos("Approve action") is True
 
 
 def test_verify_macos_swift_canceled():
-    with patch("shutil.which", return_value="/usr/bin/swift"), patch(
-        "subprocess.run", return_value=_mock_proc(returncode=1)
-    ), pytest.raises(BiometricVerificationDenied, match="canceled or failed"):
+    with (
+        patch("shutil.which", return_value="/usr/bin/swift"),
+        patch("subprocess.run", return_value=_mock_proc(returncode=1)),
+        pytest.raises(BiometricVerificationDenied, match="canceled or failed"),
+    ):
         verify_macos("Approve action")
 
 
 def test_verify_macos_swift_unavailable_falls_back_to_osascript():
-    with patch("shutil.which", return_value="/usr/bin/swift"), patch(
-        "subprocess.run",
-        side_effect=[_mock_proc(returncode=2), _mock_proc(returncode=0)],
+    with (
+        patch("shutil.which", return_value="/usr/bin/swift"),
+        patch(
+            "subprocess.run",
+            side_effect=[_mock_proc(returncode=2), _mock_proc(returncode=0)],
+        ),
     ):
         assert verify_macos("Approve action") is True
 
 
 def test_verify_macos_without_swift_uses_osascript():
-    with patch("shutil.which", return_value=None), patch(
-        "os.path.exists", return_value=False
-    ), patch("subprocess.run", return_value=_mock_proc(returncode=0)):
+    with (
+        patch("shutil.which", return_value=None),
+        patch("os.path.exists", return_value=False),
+        patch("subprocess.run", return_value=_mock_proc(returncode=0)),
+    ):
         assert verify_macos("Approve action") is True
 
 
 def test_verify_macos_osascript_user_cancel():
-    with patch("shutil.which", return_value=None), patch(
-        "os.path.exists", return_value=False
-    ), patch("subprocess.run", return_value=_mock_proc(returncode=1)), pytest.raises(
-        BiometricVerificationDenied, match="canceled or failed"
+    with (
+        patch("shutil.which", return_value=None),
+        patch("os.path.exists", return_value=False),
+        patch("subprocess.run", return_value=_mock_proc(returncode=1)),
+        pytest.raises(BiometricVerificationDenied, match="canceled or failed"),
     ):
         verify_macos("Approve action")
 
 
 def test_verify_macos_timeout():
-    with patch("shutil.which", return_value="/usr/bin/swift"), patch(
-        "subprocess.run",
-        side_effect=subprocess.TimeoutExpired(cmd="swift", timeout=10),
-    ), pytest.raises(BiometricVerificationDenied, match="timed out"):
+    with (
+        patch("shutil.which", return_value="/usr/bin/swift"),
+        patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="swift", timeout=10),
+        ),
+        pytest.raises(BiometricVerificationDenied, match="timed out"),
+    ):
         verify_macos("Approve action", timeout_seconds=10)
 
 
 def test_verify_macos_missing_osascript():
-    with patch("shutil.which", return_value=None), patch(
-        "os.path.exists", return_value=False
-    ), patch("subprocess.run", side_effect=FileNotFoundError("No osascript")), pytest.raises(
-        BiometricHardwareUnavailable, match="osascript not found"
+    with (
+        patch("shutil.which", return_value=None),
+        patch("os.path.exists", return_value=False),
+        patch("subprocess.run", side_effect=FileNotFoundError("No osascript")),
+        pytest.raises(BiometricHardwareUnavailable, match="osascript not found"),
     ):
         verify_macos("Approve action")
 
@@ -288,23 +335,32 @@ def test_verify_macos_missing_osascript():
 
 
 def test_verify_user_presence_dispatches_by_platform():
-    with patch("sys.platform", "win32"), patch(
-        "eboekhouden_mcp.biometric_guard.verify_windows", return_value=True
-    ) as mock_win:
+    with (
+        patch("sys.platform", "win32"),
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_windows", return_value=True
+        ) as mock_win,
+    ):
         assert verify_user_presence("Win prompt") is True
         mock_win.assert_called_once_with("Win prompt", timeout_seconds=60)
 
-    with patch("sys.platform", "darwin"), patch(
-        "eboekhouden_mcp.biometric_guard.verify_macos", return_value=True
-    ) as mock_mac:
+    with (
+        patch("sys.platform", "darwin"),
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_macos", return_value=True
+        ) as mock_mac,
+    ):
         assert verify_user_presence("Mac prompt") is True
         mock_mac.assert_called_once_with("Mac prompt", timeout_seconds=60)
 
 
 def test_verify_user_presence_fails_closed_on_linux_and_unsupported():
     for unsupported in ("linux", "linux2", "freebsd", "sunos5"):
-        with patch("sys.platform", unsupported), pytest.raises(
-            BiometricHardwareUnavailable, match="not supported or unavailable"
+        with (
+            patch("sys.platform", unsupported),
+            pytest.raises(
+                BiometricHardwareUnavailable, match="not supported or unavailable"
+            ),
         ):
             verify_user_presence("Prompt")
 
@@ -315,21 +371,28 @@ def test_verify_user_presence_fails_closed_on_linux_and_unsupported():
 
 
 def test_keyring_fallback_populates_secret_token():
-    with patch("keyring.get_password", return_value="vault-token-12345") as mock_keyring:
+    with patch(
+        "keyring.get_password", return_value="vault-token-12345"
+    ) as mock_keyring:
         config = MCPConfig(_env_file=None)
         mock_keyring.assert_called_once_with("eboekhouden_mcp", "secret_token")
         assert config.secret_token.get_secret_value() == "vault-token-12345"
 
 
 def test_keyring_fallback_custom_service_name():
-    with patch("keyring.get_password", return_value="custom-vault-token") as mock_keyring:
+    with patch(
+        "keyring.get_password", return_value="custom-vault-token"
+    ) as mock_keyring:
         config = MCPConfig(keyring_service_name="custom_accounting_app", _env_file=None)
         mock_keyring.assert_called_once_with("custom_accounting_app", "secret_token")
         assert config.secret_token.get_secret_value() == "custom-vault-token"
 
 
 def test_keyring_fallback_fails_when_token_empty_and_keyring_empty():
-    with patch("keyring.get_password", return_value=None), pytest.raises(ValidationError):
+    with (
+        patch("keyring.get_password", return_value=None),
+        pytest.raises(ValidationError),
+    ):
         MCPConfig(_env_file=None)
 
 
@@ -341,8 +404,9 @@ def test_keyring_not_consulted_when_secret_token_explicitly_provided():
 
 
 def test_keyring_exception_handled_gracefully():
-    with patch("keyring.get_password", side_effect=RuntimeError("Keyring locked")), pytest.raises(
-        ValidationError
+    with (
+        patch("keyring.get_password", side_effect=RuntimeError("Keyring locked")),
+        pytest.raises(ValidationError),
     ):
         MCPConfig(_env_file=None)
 
@@ -362,11 +426,12 @@ async def test_server_write_gate_biometric_success():
     )
     server = create_server(config)
 
-    with patch(
-        "eboekhouden_mcp.server.verify_user_presence", return_value=True
-    ) as mock_verify, patch(
-        "eboekhouden.services.relation.RelationService.delete"
-    ) as mock_delete:
+    with (
+        patch(
+            "eboekhouden_mcp.server.verify_user_presence", return_value=True
+        ) as mock_verify,
+        patch("eboekhouden.services.relation.RelationService.delete") as mock_delete,
+    ):
         result = await server.request_handlers[CallToolRequest](
             CallToolRequest(
                 params=CallToolRequestParams(
@@ -449,11 +514,10 @@ async def test_server_write_gate_bypassed_when_require_biometric_false():
     )
     server = create_server(config)
 
-    with patch(
-        "eboekhouden_mcp.server.verify_user_presence"
-    ) as mock_verify, patch(
-        "eboekhouden.services.relation.RelationService.delete"
-    ) as mock_delete:
+    with (
+        patch("eboekhouden_mcp.server.verify_user_presence") as mock_verify,
+        patch("eboekhouden.services.relation.RelationService.delete") as mock_delete,
+    ):
         result = await server.request_handlers[CallToolRequest](
             CallToolRequest(
                 params=CallToolRequestParams(
@@ -496,29 +560,38 @@ async def test_read_tools_never_trigger_biometric_check():
 
 def test_biometric_guard_cli_success(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["biometric_guard", "--test"])
-    with patch(
-        "eboekhouden_mcp.biometric_guard.verify_user_presence", return_value=True
-    ), patch("sys.exit") as mock_exit:
+    with (
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_user_presence", return_value=True
+        ),
+        patch("sys.exit") as mock_exit,
+    ):
         biometric_main()
         mock_exit.assert_called_once_with(0)
 
 
 def test_biometric_guard_cli_denied(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["biometric_guard", "--test"])
-    with patch(
-        "eboekhouden_mcp.biometric_guard.verify_user_presence",
-        side_effect=BiometricVerificationDenied("Canceled"),
-    ), patch("sys.exit") as mock_exit:
+    with (
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_user_presence",
+            side_effect=BiometricVerificationDenied("Canceled"),
+        ),
+        patch("sys.exit") as mock_exit,
+    ):
         biometric_main()
         mock_exit.assert_called_once_with(1)
 
 
 def test_biometric_guard_cli_unavailable(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["biometric_guard", "--test"])
-    with patch(
-        "eboekhouden_mcp.biometric_guard.verify_user_presence",
-        side_effect=BiometricHardwareUnavailable("No device"),
-    ), patch("sys.exit") as mock_exit:
+    with (
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_user_presence",
+            side_effect=BiometricHardwareUnavailable("No device"),
+        ),
+        patch("sys.exit") as mock_exit,
+    ):
         biometric_main()
         mock_exit.assert_called_once_with(2)
 
@@ -568,10 +641,13 @@ def test_server_cli_test_biometric_flag_generic_exception(monkeypatch):
 
 def test_biometric_guard_cli_generic_exception(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["biometric_guard", "--test"])
-    with patch(
-        "eboekhouden_mcp.biometric_guard.verify_user_presence",
-        side_effect=RuntimeError("Unexpected error"),
-    ), patch("sys.exit") as mock_exit:
+    with (
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_user_presence",
+            side_effect=RuntimeError("Unexpected error"),
+        ),
+        patch("sys.exit") as mock_exit,
+    ):
         biometric_main()
         mock_exit.assert_called_once_with(3)
 
@@ -583,7 +659,9 @@ def test_format_write_prompt_resilience_to_malformed_values():
     assert _format_currency("not_numeric") == "not_numeric"
 
     # Malformed invoice amount
-    res = format_write_prompt("create_invoice", {"amount": "bad_number", "relation_id": 10})
+    res = format_write_prompt(
+        "create_invoice", {"amount": "bad_number", "relation_id": 10}
+    )
     assert res == "e-Boekhouden MCP: Approve POST Invoice to Relation 10?"
 
     # Malformed invoice items
@@ -594,7 +672,9 @@ def test_format_write_prompt_resilience_to_malformed_values():
     assert res == "e-Boekhouden MCP: Approve POST Invoice to Relation 10?"
 
     # Malformed mutation amount
-    res = format_write_prompt("create_mutation", {"amount": "bad_number", "ledger_id": 20})
+    res = format_write_prompt(
+        "create_mutation", {"amount": "bad_number", "ledger_id": 20}
+    )
     assert res == "e-Boekhouden MCP: Approve POST Mutation on Ledger 20?"
 
     # Malformed mutation JSON rows
@@ -620,12 +700,15 @@ def test_format_write_prompt_resilience_to_malformed_values():
 
 
 def test_verify_macos_swift_exception_falls_back_to_osascript():
-    with patch("shutil.which", return_value="/usr/bin/swift"), patch(
-        "subprocess.run",
-        side_effect=[
-            OSError("Swift crashed"),
-            _mock_proc(returncode=0),
-        ],
+    with (
+        patch("shutil.which", return_value="/usr/bin/swift"),
+        patch(
+            "subprocess.run",
+            side_effect=[
+                OSError("Swift crashed"),
+                _mock_proc(returncode=0),
+            ],
+        ),
     ):
         assert verify_macos("Approve action") is True
 
@@ -633,9 +716,11 @@ def test_verify_macos_swift_exception_falls_back_to_osascript():
 def test_verify_macos_osascript_timeout():
     from eboekhouden_mcp.biometric_guard import _verify_macos_osascript
 
-    with patch(
-        "subprocess.run",
-        side_effect=subprocess.TimeoutExpired(cmd="osascript", timeout=15),
-    ), pytest.raises(BiometricVerificationDenied, match="timed out"):
+    with (
+        patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="osascript", timeout=15),
+        ),
+        pytest.raises(BiometricVerificationDenied, match="timed out"),
+    ):
         _verify_macos_osascript("Approve action", timeout_seconds=15)
-

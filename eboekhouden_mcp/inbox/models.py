@@ -9,7 +9,17 @@ from pydantic import BaseModel, ConfigDict, Field
 class TaxAdviceTip(BaseModel):
     """Tax advice tip extracted or derived for an invoice."""
 
-    type: Literal["kia", "vaste_activa", "gemengd_gebruik", "representatie", "geen_btw", "other"] | str = Field(
+    type: (
+        Literal[
+            "kia",
+            "vaste_activa",
+            "gemengd_gebruik",
+            "representatie",
+            "geen_btw",
+            "other",
+        ]
+        | str
+    ) = Field(
         description="Tax tip type category: kia, vaste_activa, gemengd_gebruik, representatie, geen_btw"
     )
     tekst: str = Field(description="Dutch tax advice explanation")
@@ -21,15 +31,29 @@ class ExtractedInvoiceData(BaseModel):
     """Structured extraction output from Dutch invoice/receipt OCR."""
 
     leverancier: str = Field(description="Supplier/company name")
-    factuurnummer: str | None = Field(default=None, description="Invoice or receipt number")
+    factuurnummer: str | None = Field(
+        default=None, description="Invoice or receipt number"
+    )
     datum: str = Field(description="Invoice date in YYYY-MM-DD format")
-    bedrag_excl_btw: float = Field(alias="bedragExclBtw", description="Amount excluding VAT")
-    bedrag_incl_btw: float = Field(alias="bedragInclBtw", description="Amount including VAT")
+    bedrag_excl_btw: float = Field(
+        alias="bedragExclBtw", description="Amount excluding VAT"
+    )
+    bedrag_incl_btw: float = Field(
+        alias="bedragInclBtw", description="Amount including VAT"
+    )
     btw_bedrag: float = Field(default=0.0, alias="btwBedrag", description="VAT amount")
-    btw_percentage: float | None = Field(default=None, alias="btwPercentage", description="VAT percentage (0, 9, 21)")
-    currency: str = Field(default="EUR", description="ISO 4217 currency code (e.g. EUR, USD, CHF)")
-    omschrijving: str = Field(default="", description="Description of the goods or services")
-    grootboekcode: str | None = Field(default=None, description="Suggested ledger code (e.g. 4100, 4300)")
+    btw_percentage: float | None = Field(
+        default=None, alias="btwPercentage", description="VAT percentage (0, 9, 21)"
+    )
+    currency: str = Field(
+        default="EUR", description="ISO 4217 currency code (e.g. EUR, USD, CHF)"
+    )
+    omschrijving: str = Field(
+        default="", description="Description of the goods or services"
+    )
+    grootboekcode: str | None = Field(
+        default=None, description="Suggested ledger code (e.g. 4100, 4300)"
+    )
     btw_code: str | None = Field(
         default=None,
         alias="btwCode",
@@ -50,8 +74,12 @@ class ExtractedInvoiceData(BaseModel):
         alias="receiptReason",
         description="Explanation why document was classified as receipt",
     )
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Extraction confidence score")
-    redenering: str = Field(default="", description="Reasoning for ledger/VAT classification")
+    confidence: float = Field(
+        default=1.0, ge=0.0, le=1.0, description="Extraction confidence score"
+    )
+    redenering: str = Field(
+        default="", description="Reasoning for ledger/VAT classification"
+    )
     belasting_advies: list[TaxAdviceTip] = Field(
         default_factory=list,
         alias="belastingAdvies",
@@ -65,11 +93,17 @@ class BookingLine(BaseModel):
     """Validated booking line item for a mutation or invoice."""
 
     ledger_id: int = Field(description="Ledger account ID")
-    ledger_code: str | None = Field(default=None, description="Ledger account code (e.g. 4100)")
+    ledger_code: str | None = Field(
+        default=None, description="Ledger account code (e.g. 4100)"
+    )
     vat_code: str = Field(description="VAT code, e.g. HOOG_INK_21 or GEEN")
     amount: float = Field(description="Line amount")
-    vat_amount: float | None = Field(default=None, description="VAT amount for this line")
-    cost_center_id: int | None = Field(default=None, description="Cost center ID if assigned")
+    vat_amount: float | None = Field(
+        default=None, description="VAT amount for this line"
+    )
+    cost_center_id: int | None = Field(
+        default=None, description="Cost center ID if assigned"
+    )
     description: str | None = Field(default=None, description="Line description")
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
@@ -94,7 +128,9 @@ class BookingProposal(BaseModel):
         default=None,
         description="Matched relation/supplier ID (None for receipts without relation)",
     )
-    relation_name: str | None = Field(default=None, description="Name of matched relation")
+    relation_name: str | None = Field(
+        default=None, description="Name of matched relation"
+    )
     relation_matched: bool = Field(
         default=False,
         description="Whether supplier was matched against an existing relation in e-Boekhouden",
@@ -113,7 +149,9 @@ class BookingProposal(BaseModel):
         default=False,
         description="True if document is a receipt (bonnetje) suitable for direct mutation without creditor relation",
     )
-    receipt_reason: str = Field(default="", description="Reason document is classified as receipt")
+    receipt_reason: str = Field(
+        default="", description="Reason document is classified as receipt"
+    )
     confidence: float = Field(default=1.0, description="Overall proposal confidence")
     tax_advice: list[TaxAdviceTip] = Field(
         default_factory=list,
@@ -139,7 +177,9 @@ class BankTransactionSuggestion(BaseModel):
     """AI suggestion for classifying a bank transaction line."""
 
     grootboekcode: str = Field(description="Suggested ledger account code")
-    ledger_id: int | None = Field(default=None, description="Matched ledger account ID if resolved")
+    ledger_id: int | None = Field(
+        default=None, description="Matched ledger account ID if resolved"
+    )
     btw_code: str = Field(description="Suggested VAT code (e.g. HOOG_INK_21, GEEN)")
     soort: str = Field(
         description="Transaction type name: GeldUitgegeven, GeldOntvangen, FactuurbetalingVerstuurd, FactuurbetalingOntvangen"
@@ -148,7 +188,11 @@ class BankTransactionSuggestion(BaseModel):
         description="e-Boekhouden mutation type code: '3', '4', '5', '6'"
     )
     omschrijving: str = Field(description="Suggested clean description")
-    confidence: float = Field(default=0.85, ge=0.0, le=1.0, description="Suggestion confidence")
-    reasoning: str | None = Field(default=None, description="Explanation for suggestion")
+    confidence: float = Field(
+        default=0.85, ge=0.0, le=1.0, description="Suggestion confidence"
+    )
+    reasoning: str | None = Field(
+        default=None, description="Explanation for suggestion"
+    )
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")

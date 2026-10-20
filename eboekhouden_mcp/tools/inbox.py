@@ -12,8 +12,6 @@ from eboekhouden_mcp.inbox.models import ExtractedInvoiceData
 from eboekhouden_mcp.inbox.prompts import (
     DUTCH_INVOICE_OCR_SYSTEM_PROMPT,
     DUTCH_TRANSACTION_CLASSIFICATION_PROMPT,
-    build_invoice_ocr_prompt,
-    build_transaction_classify_prompt,
 )
 from eboekhouden_mcp.inbox.proposal import (
     generate_booking_proposal,
@@ -168,7 +166,12 @@ class PrepareBookingProposalTool(BaseTool):
             try:
                 raw_data = json.loads(raw_text)
             except json.JSONDecodeError:
-                raw_data = {"leverancier": "Onbekend", "datum": "2026-01-01", "bedragExclBtw": 0.0, "bedragInclBtw": 0.0}
+                raw_data = {
+                    "leverancier": "Onbekend",
+                    "datum": "2026-01-01",
+                    "bedragExclBtw": 0.0,
+                    "bedragInclBtw": 0.0,
+                }
 
         if not isinstance(raw_data, dict):
             raise ValueError(
@@ -214,7 +217,9 @@ class PrepareBookingProposalTool(BaseTool):
         cost_centers = arguments.get("cost_centers")
         if cost_centers is None:
             try:
-                cost_centers = [cc.model_dump() for cc in client.cost_centers.list().items]
+                cost_centers = [
+                    cc.model_dump() for cc in client.cost_centers.list().items
+                ]
             except Exception:
                 cost_centers = []
 

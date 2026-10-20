@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import MagicMock
 
 import httpx
@@ -121,6 +122,7 @@ def test_build_afschrift_params():
 
 def test_client_handles_session_expired_status():
     """HTTP 401 must raise SessionExpiredError."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="Unauthorized")
 
@@ -133,10 +135,15 @@ def test_client_handles_session_expired_status():
 
 def test_client_handles_security_envelope():
     """HTTP 200 with SECURITY_010 / errorType='security' must raise SessionExpiredError."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            json={"errorType": "security", "message": "Niet ingelogd", "code": "SECURITY_010"},
+            json={
+                "errorType": "security",
+                "message": "Niet ingelogd",
+                "code": "SECURITY_010",
+            },
         )
 
     mock_http = httpx.Client(transport=httpx.MockTransport(handler))
@@ -148,10 +155,15 @@ def test_client_handles_security_envelope():
 
 def test_client_handles_validation_error_envelope():
     """Application validation errors must raise WebSessionError with upstream message."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            json={"errorType": "validation", "message": "Rekening bestaat niet", "code": "VAL_001"},
+            json={
+                "errorType": "validation",
+                "message": "Rekening bestaat niet",
+                "code": "VAL_001",
+            },
         )
 
     mock_http = httpx.Client(transport=httpx.MockTransport(handler))
@@ -176,16 +188,43 @@ def test_client_sync_endpoints():
 
         url = str(request.url)
         if "/v1/api/import/gridtable" in url:
-            return httpx.Response(200, json={"rowCount": 1, "data": [[1, "2026-03-01", "IBAN1", "2026-03-01", -10.0, "Test", "", 1000, "", False, ""]]})
+            return httpx.Response(
+                200,
+                json={
+                    "rowCount": 1,
+                    "data": [
+                        [
+                            1,
+                            "2026-03-01",
+                            "IBAN1",
+                            "2026-03-01",
+                            -10.0,
+                            "Test",
+                            "",
+                            1000,
+                            "",
+                            False,
+                            "",
+                        ]
+                    ],
+                },
+            )
         if "/v1/api/mutatie/getmutatiebyafschrift" in url:
-            return httpx.Response(200, json={"mutNr": 0, "suggestie": {"grootboekId": 201}})
+            return httpx.Response(
+                200, json={"mutNr": 0, "suggestie": {"grootboekId": 201}}
+            )
         if "/v1/api/folderkoppel/koppel/item" in url:
             return httpx.Response(200, json={"success": True})
         if "/v1/api/folder/directory" in url:
             return httpx.Response(
                 200,
                 json=[
-                    {"id": 559261, "naam": "Inkoopfacturen (Mail & Herken)", "parentId": None, "isDeleted": False}
+                    {
+                        "id": 559261,
+                        "naam": "Inkoopfacturen (Mail & Herken)",
+                        "parentId": None,
+                        "isDeleted": False,
+                    }
                 ],
             )
         if "/v1/api/folder/559261/filelist" in url:
@@ -281,6 +320,7 @@ def test_client_sync_endpoints():
 @pytest.mark.asyncio
 async def test_client_async_endpoints():
     """Verify async versions of WebSessionClient methods."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if "/v1/api/import/gridtable" in url:
@@ -292,11 +332,17 @@ async def test_client_async_endpoints():
         if "/v1/api/folder/directory" in url:
             return httpx.Response(200, json=[{"id": 10, "naam": "Inbox"}])
         if "/v1/api/folder/10/filelist" in url:
-            return httpx.Response(200, json=[{"id": 99, "naam": "doc.pdf", "menHStatus": 1}])
+            return httpx.Response(
+                200, json=[{"id": 99, "naam": "doc.pdf", "menHStatus": 1}]
+            )
         if "/v1/api/mutatie/folder/99/model" in url:
-            return httpx.Response(200, json={"mutatie": {"soort": 1}, "suggestedAiBtwNr": "NL001"})
+            return httpx.Response(
+                200, json={"mutatie": {"soort": 1}, "suggestedAiBtwNr": "NL001"}
+            )
         if "/v1/api/mutatie/nr/281/model" in url:
-            return httpx.Response(200, json={"mutatie": {"nr": 281}, "folderKoppelId": 99})
+            return httpx.Response(
+                200, json={"mutatie": {"nr": 281}, "folderKoppelId": 99}
+            )
         if request.method == "POST" and url.endswith("/v1/api/mutatie"):
             return httpx.Response(200, json={"nr": 300})
         return httpx.Response(404)
@@ -417,7 +463,13 @@ async def test_list_archive_files_tool():
     """Test list_archive_files MCP tool."""
     mock_client = MagicMock(spec=WebSessionClient)
     mock_client.async_get_archive_files.return_value = [
-        {"id": 1493990, "naam": "inv.pdf", "soort": "F", "menHStatus": 2, "koppelCount": 0}
+        {
+            "id": 1493990,
+            "naam": "inv.pdf",
+            "soort": "F",
+            "menHStatus": 2,
+            "koppelCount": 0,
+        }
     ]
 
     tool = ListArchiveFilesTool(client=mock_client)
@@ -450,7 +502,9 @@ async def test_get_recognized_invoice_model_tool():
 
     result = await tool.execute(dummy_sdk_client, {"file_id": 1493990})
     assert result["suggestedAiIban"] == "NL91ABNA0417164300"
-    mock_client.async_get_recognized_invoice_model.assert_called_once_with(file_id=1493990)
+    mock_client.async_get_recognized_invoice_model.assert_called_once_with(
+        file_id=1493990
+    )
 
 
 @pytest.mark.asyncio
@@ -505,7 +559,9 @@ def test_server_web_session_policy():
     config_default = MCPConfig(secret_token="test-token", _env_file=None)
     server_default = EBoekhoudenMCPServer(config_default)
     assert server_default.tool_is_enabled("get_unprocessed_bank_transactions") is False
-    assert server_default.tool_is_enabled("suggest_mutation_for_bank_statement") is False
+    assert (
+        server_default.tool_is_enabled("suggest_mutation_for_bank_statement") is False
+    )
     assert server_default.tool_is_enabled("attach_file_to_mutation") is False
     assert server_default.tool_is_enabled("list_archive_folders") is False
     assert server_default.tool_is_enabled("list_archive_files") is False
@@ -543,7 +599,9 @@ def test_server_web_session_policy():
     )
     server_web_write = EBoekhoudenMCPServer(config_web_write)
     assert server_web_write.tool_is_enabled("get_unprocessed_bank_transactions") is True
-    assert server_web_write.tool_is_enabled("suggest_mutation_for_bank_statement") is True
+    assert (
+        server_web_write.tool_is_enabled("suggest_mutation_for_bank_statement") is True
+    )
     assert server_web_write.tool_is_enabled("list_archive_folders") is True
     assert server_web_write.tool_is_enabled("list_archive_files") is True
     assert server_web_write.tool_is_enabled("get_recognized_invoice_model") is True
@@ -684,5 +742,3 @@ async def test_upload_and_delete_tools():
     )
     assert del_res["success"] is True
     assert del_res["resolved_ids"] == {42: 90001}
-
-

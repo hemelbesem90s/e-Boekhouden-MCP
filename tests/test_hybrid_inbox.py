@@ -2,25 +2,20 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock
 
 import pytest
 
 from eboekhouden_mcp.inbox.models import (
-    BankTransactionSuggestion,
     BookingProposal,
     ExtractedInvoiceData,
-    TaxAdviceTip,
 )
 from eboekhouden_mcp.inbox.prompts import (
     DUTCH_INVOICE_OCR_SYSTEM_PROMPT,
-    DUTCH_TRANSACTION_CLASSIFICATION_PROMPT,
     build_invoice_ocr_prompt,
     build_transaction_classify_prompt,
 )
 from eboekhouden_mcp.inbox.proposal import (
-    find_header_account,
     find_ledger_account,
     generate_booking_proposal,
     match_relation,
@@ -145,16 +140,31 @@ def test_extracted_invoice_data_model_deserialization():
 
 SAMPLE_RELATIONS = [
     {"id": 10, "code": "REL-001", "name": "Bol.com B.V.", "company": "Bol.com B.V."},
-    {"id": 20, "code": "REL-002", "name": "Apple Distribution International", "company": "Apple"},
+    {
+        "id": 20,
+        "code": "REL-002",
+        "name": "Apple Distribution International",
+        "company": "Apple",
+    },
     {"id": 30, "code": "REL-003", "name": "TransIP B.V.", "company": "TransIP"},
-    {"id": 40, "code": "REL-004", "name": "Shell Nederland Verkoopmaatschappij", "company": "Shell"},
+    {
+        "id": 40,
+        "code": "REL-004",
+        "name": "Shell Nederland Verkoopmaatschappij",
+        "company": "Shell",
+    },
 ]
 
 SAMPLE_LEDGERS = [
     {"id": 101, "code": "1000", "description": "Kas / Bank", "category": "FIN"},
     {"id": 102, "code": "1600", "description": "Crediteuren", "category": "CRED"},
     {"id": 103, "code": "1300", "description": "Debiteuren", "category": "DEB"},
-    {"id": 201, "code": "4100", "description": "Kantoorkosten / Software", "category": "VW"},
+    {
+        "id": 201,
+        "code": "4100",
+        "description": "Kantoorkosten / Software",
+        "category": "VW",
+    },
     {"id": 202, "code": "4200", "description": "Huisvestingskosten", "category": "VW"},
     {"id": 203, "code": "4300", "description": "Vervoerskosten", "category": "VW"},
     {"id": 204, "code": "4400", "description": "Verkoopkosten", "category": "VW"},

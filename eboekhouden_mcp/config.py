@@ -67,7 +67,7 @@ class MCPConfig(BaseSettings):
         if isinstance(token, SecretStr):
             raw_token = token.get_secret_value()
         else:
-            raw_token = str(token) if token is not None else ""
+            raw_token = str(token) if token is not None else ""  # noqa: F841
 
         if token is None:
             service_name = d.get(
@@ -80,13 +80,21 @@ class MCPConfig(BaseSettings):
                 keyring_token = keyring.get_password(service_name, "secret_token")
                 if keyring_token and keyring_token.strip():
                     d["secret_token"] = keyring_token.strip()
-                web_enabled = str(d.get("enable_web_session") or d.get("EBOEKHOUDEN_MCP_ENABLE_WEB_SESSION") or "").lower() in ("true", "1", "yes")
-                web_token = d.get("web_session_token") or d.get("EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN")
+                web_enabled = str(
+                    d.get("enable_web_session")
+                    or d.get("EBOEKHOUDEN_MCP_ENABLE_WEB_SESSION")
+                    or ""
+                ).lower() in ("true", "1", "yes")
+                web_token = d.get("web_session_token") or d.get(
+                    "EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN"
+                )
                 if web_enabled and not web_token:
-                    keyring_web_token = keyring.get_password(service_name, "web_session_token")
+                    keyring_web_token = keyring.get_password(
+                        service_name, "web_session_token"
+                    )
                     if keyring_web_token and keyring_web_token.strip():
                         d["web_session_token"] = keyring_web_token.strip()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         return d
 

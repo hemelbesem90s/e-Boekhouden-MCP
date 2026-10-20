@@ -12,7 +12,7 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import sys
 from typing import Any
 
@@ -456,7 +456,7 @@ def verify_windows(prompt_message: str, timeout_seconds: int = 60) -> bool:
     env["MCP_BIOMETRIC_PROMPT"] = prompt_message
 
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603, B607
             [
                 "powershell.exe",
                 "-NoProfile",
@@ -493,7 +493,9 @@ def verify_windows(prompt_message: str, timeout_seconds: int = 60) -> bool:
     if output in ("VerificationSucceeded", "Verified"):
         return True
     if output in ("Canceled", "RetriesExhausted"):
-        raise BiometricVerificationDenied("User canceled or failed biometric verification.")
+        raise BiometricVerificationDenied(
+            "User canceled or failed biometric verification."
+        )
     if output in ("DeviceNotPresent", "NotConfiguredForUser", "DisabledByPolicy"):
         raise BiometricHardwareUnavailable(
             f"Biometric verification unavailable on this system: {output}."
@@ -534,10 +536,10 @@ def _verify_macos_osascript(prompt_message: str, timeout_seconds: int = 60) -> b
         f'display dialog "{escaped}" '
         'with title "e-Boekhouden MCP" '
         'buttons {"Cancel", "Approve"} default button "Approve" '
-        'with icon caution'
+        "with icon caution"
     )
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603, B607
             ["osascript", "-e", script],
             capture_output=True,
             check=False,
@@ -546,13 +548,17 @@ def _verify_macos_osascript(prompt_message: str, timeout_seconds: int = 60) -> b
         )
         if proc.returncode == 0:
             return True
-        raise BiometricVerificationDenied("User canceled or failed biometric verification.")
+        raise BiometricVerificationDenied(
+            "User canceled or failed biometric verification."
+        )
     except subprocess.TimeoutExpired as exc:
         raise BiometricVerificationDenied(
             f"Biometric verification timed out after {timeout_seconds} seconds."
         ) from exc
     except FileNotFoundError as exc:
-        raise BiometricHardwareUnavailable(f"osascript not found on system: {exc}") from exc
+        raise BiometricHardwareUnavailable(
+            f"osascript not found on system: {exc}"
+        ) from exc
 
 
 def verify_macos(prompt_message: str, timeout_seconds: int = 60) -> bool:
@@ -574,7 +580,7 @@ def verify_macos(prompt_message: str, timeout_seconds: int = 60) -> bool:
     )
     if swift_cmd:
         try:
-            proc = subprocess.run(
+            proc = subprocess.run(  # nosec B603
                 [swift_cmd, "-e", MACOS_SWIFT_SCRIPT, prompt_message],
                 capture_output=True,
                 check=False,
@@ -584,7 +590,9 @@ def verify_macos(prompt_message: str, timeout_seconds: int = 60) -> bool:
             if proc.returncode == 0:
                 return True
             if proc.returncode == 1:
-                raise BiometricVerificationDenied("User canceled or failed biometric verification.")
+                raise BiometricVerificationDenied(
+                    "User canceled or failed biometric verification."
+                )
             if proc.returncode == 2:
                 # Device cannot evaluate policy, fall back to dialog
                 return _verify_macos_osascript(prompt_message, timeout_seconds)
