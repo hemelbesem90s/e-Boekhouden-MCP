@@ -68,6 +68,7 @@ class VatCode(str, Enum):
 class MutationType(str, Enum):
     """Types of mutations/journal entries."""
 
+    OPENING_BALANCE = "0"  # Beginbalans
     INVOICE_RECEIVED = "1"  # Inkoopfactuur
     INVOICE_SENT = "2"  # Verkoopfactuur
     PAYMENT_RECEIVED = "3"  # Ontvangen factuur betaling
