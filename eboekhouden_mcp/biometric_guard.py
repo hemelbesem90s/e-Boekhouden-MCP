@@ -140,11 +140,11 @@ if (-not $prompt) {
 }
 
 $op = [Windows.Security.Credentials.UI.UserConsentVerifier]::RequestVerificationAsync($prompt)
-$asTaskGeneric = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { 
-    $_.Name -eq 'AsTask' -and 
-    $_.GetParameters().Count -eq 1 -and 
-    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' 
-}
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and
+    $_.GetParameters().Count -eq 1 -and
+    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+})[0]
 $asTask = $asTaskGeneric.MakeGenericMethod([Windows.Security.Credentials.UI.UserConsentVerificationResult])
 $task = $asTask.Invoke($null, @($op))
 $task.Wait()
@@ -176,8 +176,7 @@ def verify_windows(prompt_message: str, timeout_seconds: int = 60) -> bool:
 
     try:
         proc = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-"],
-            input=WINDOWS_USER_CONSENT_PS,
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_USER_CONSENT_PS],
             text=True,
             capture_output=True,
             check=False,
