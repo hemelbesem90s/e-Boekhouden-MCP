@@ -355,6 +355,13 @@ This project is built upon the open-source innovations of the Dutch accounting a
   - Receipt (*bonnetje*) detection heuristics and automatic ledger cross-referencing.
   - Reverse-engineered internal web session API schemas for bank import statements and `/folderkoppel` attachment linking.
 
+### 3. Gemini Argon (Google DeepMind — Antigravity)
+- **Role**: Co-Architect & Agentic Engineering Partner
+- **Hybrid Integration & Security Engineering**:
+  - Unified 4-layer hybrid MCP architecture combining the REST v1 accounting engine, AI Bookkeeping Inbox, OS Keyring credential vault, and 12-tool Web Session Bridge.
+  - Native OS biometric hardware presence gate (**Windows Hello** WinRT `UserConsentVerifier` with foreground window focus & **macOS Touch ID** `LocalAuthentication`).
+  - Automatic web-mutation payload normalization (`MUT_026`, `MUT_112`, `MUT_117`, `MutNr`) and fail-closed Digital Archive upload/management tooling.
+
 See the [`NOTICE`](NOTICE) and [`LICENSE`](LICENSE) files for complete license texts and third-party copyright notices.
 
 ---
