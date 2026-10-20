@@ -57,7 +57,7 @@ async def test_send_file_to_digital_archive_posts_graph_send_mail_payload(
     file_path.write_bytes(file_bytes)
     monkeypatch.setenv("EBOEKHOUDEN_MCP_ARCHIVE_ROOT", str(tmp_path))
 
-    monkeypatch.setenv("EBOEKHOUDEN_ARCHIVE_EMAIL", "1594863@e-Boekhouden.nl")
+    monkeypatch.setenv("EBOEKHOUDEN_ARCHIVE_EMAIL", "1234567@e-Boekhouden.nl")
     monkeypatch.setenv("MS_GRAPH_TENANT_ID", "tenant-id")
     monkeypatch.setenv("MS_GRAPH_CLIENT_ID", "client-id")
     monkeypatch.setenv("MS_GRAPH_CLIENT_SECRET", "client-secret")
@@ -113,7 +113,7 @@ async def test_send_file_to_digital_archive_posts_graph_send_mail_payload(
     message = payload["message"]
     assert (
         message["toRecipients"][0]["emailAddress"]["address"]
-        == "1594863@e-Boekhouden.nl"
+        == "1234567@e-Boekhouden.nl"
     )
     attachment = message["attachments"][0]
     assert attachment["name"] == "Supplier BV - INV-1.pdf"
@@ -127,7 +127,7 @@ def test_archive_tool_is_registered():
     register_all_tools(registry)
 
     assert "send_file_to_digital_archive" in registry
-    assert len(registry) == 60  # 37 base + 12 power + 11 extensions
+    assert len(registry) == 64  # 37 base + 12 power + 15 extensions
 
 
 @pytest.mark.asyncio

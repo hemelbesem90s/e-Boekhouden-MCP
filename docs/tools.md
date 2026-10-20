@@ -1,6 +1,6 @@
 # Tool catalog
 
-The server registers 55 tools across four architectural layers. The default surface contains 39 read-only tools (34 core REST v1 tools, 3 AI Bookkeeping Inbox tools, and 2 web session inspection tools). Enabling writes exposes 16 write tools (14 accounting write tools, 1 archive tool, and 1 mutation attachment tool), gated behind explicit confirmation and native OS biometrics.
+The server registers 64 tools across four architectural layers. The default surface contains 43 read-only tools (34 core REST v1 tools, 3 AI Bookkeeping Inbox tools, and 6 web session inspection tools). Enabling writes exposes 21 write tools (14 accounting write tools, 1 archive tool, and 6 web session write tools), gated behind explicit confirmation and native OS biometrics.
 
 ## Search and batch detail
 
@@ -55,6 +55,15 @@ The server registers 55 tools across four architectural layers. The default surf
 | `get_unprocessed_bank_transactions` | Read raw bank statement entries directly from e-Boekhouden's internal import grid. | Read-only |
 | `suggest_mutation_for_bank_statement` | Get mutation prefill suggestions from internal bank matching logic. | Read-only |
 | `attach_file_to_mutation` | Link an uploaded archive document directly to a mutation via `/folderkoppel`. | Opt-in Write |
+| `list_archive_folders` | List Digital Archive folders (including Mail & Herken inbox folders). | Read-only |
+| `list_archive_files` | List files and Mail & Herken recognition status inside a Digital Archive folder. | Read-only |
+| `get_recognized_invoice_model` | Retrieve internal AI OCR recognition model for a Digital Archive file. | Read-only |
+| `get_mutation_model_by_number` | Retrieve editable web mutation model by mutation number (`nr`). | Read-only |
+| `save_web_mutation` | Create or update a mutation using the normalized web mutation model. | Opt-in Write |
+| `upload_archive_file` | Upload a local file from disk directly into a Digital Archive folder. | Opt-in Write |
+| `move_archive_files` | Move Digital Archive files into a target folder. | Opt-in Write |
+| `create_archive_folder` | Create a new folder in the Digital Archive. | Opt-in Write |
+| `delete_web_mutations` | Resolve mutation numbers (`nr`) to internal grid IDs and delete them. | Opt-in Write |
 
 ## Result behavior
 

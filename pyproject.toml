@@ -35,9 +35,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/matisup10/e-Boekhouden-MCP"
-Repository = "https://github.com/matisup10/e-Boekhouden-MCP"
-Issues = "https://github.com/matisup10/e-Boekhouden-MCP/issues"
+Homepage = "https://github.com/hemelbesem90s/e-Boekhouden-MCP"
+Repository = "https://github.com/hemelbesem90s/e-Boekhouden-MCP"
+Issues = "https://github.com/hemelbesem90s/e-Boekhouden-MCP/issues"
 
 [project.optional-dependencies]
 dev = [

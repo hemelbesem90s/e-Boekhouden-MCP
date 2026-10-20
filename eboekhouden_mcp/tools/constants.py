@@ -21,6 +21,10 @@ WRITE_TOOL_NAMES = frozenset(
         "send_file_to_digital_archive",
         "attach_file_to_mutation",
         "save_web_mutation",
+        "move_archive_files",
+        "create_archive_folder",
+        "upload_archive_file",
+        "delete_web_mutations",
     }
 )
 
@@ -30,6 +34,7 @@ DESTRUCTIVE_TOOL_NAMES = frozenset(
         "delete_product",
         "delete_cost_center",
         "delete_member",
+        "delete_web_mutations",
     }
 )
 
@@ -45,6 +50,10 @@ WEB_SESSION_TOOL_NAMES = frozenset(
         "get_recognized_invoice_model",
         "get_mutation_model_by_number",
         "save_web_mutation",
+        "move_archive_files",
+        "create_archive_folder",
+        "upload_archive_file",
+        "delete_web_mutations",
     }
 )
 

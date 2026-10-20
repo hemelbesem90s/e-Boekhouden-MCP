@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10--3.13-3776AB?logo=python&logoColor=white" alt="Python 3.10 through 3.13">
-  <img src="https://img.shields.io/badge/MCP-stdio%20%7C%2060%20Tools-147D64" alt="MCP stdio 60 Tools">
+  <img src="https://img.shields.io/badge/MCP-stdio%20%7C%2064%20Tools-147D64" alt="MCP stdio 64 Tools">
   <img src="https://img.shields.io/badge/Biometric%20Gate-Windows%20Hello%20%7C%20Touch%20ID-blueviolet" alt="Biometric Hardware Gate">
   <img src="https://img.shields.io/badge/Credential%20Store-Keyring%20%2F%20Keychain-0078D4" alt="OS Keyring Integration">
   <img src="https://img.shields.io/badge/Coverage-82%25-brightgreen" alt="82% Test Coverage">
@@ -21,7 +21,7 @@
   <a href="#architectural-layers">Architecture</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#ai-client-configuration">AI assistants</a> ·
-  <a href="#tool-catalog-60-tools">Tool catalog</a> ·
+  <a href="#tool-catalog-64-tools">Tool catalog</a> ·
   <a href="#security--biometric-hardware-gate">Biometric security</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#credits--attribution">Credits & Attribution</a>
@@ -51,7 +51,7 @@ flowchart TD
         KeyringStore[("OS Keyring / Credential Manager\n(Zero-Plaintext Storage)")]
     end
 
-    subgraph MCPServer["e-Boekhouden Hybrid MCP Server (60 Tools)"]
+    subgraph MCPServer["e-Boekhouden Hybrid MCP Server (64 Tools)"]
         Registry["Tool Registry & Input Validation\n(Pydantic v2 Strict Bounds)"]
         
         subgraph L1["Layer 1: Core REST v1 Engine (49 Tools)"]
@@ -65,7 +65,7 @@ flowchart TD
             BankClassify["Bank Statement Classifier\n(Ledger & VAT Code Suggestion)"]
         end
 
-        subgraph L4["Layer 4: Modular Web Session Bridge (8 Tools)"]
+        subgraph L4["Layer 4: Modular Web Session Bridge (12 Tools)"]
             WebGrid["Import Grid & Bank Reconciliation"]
             WebArchive["Digital Archive (Mail & Herken) & OCR Model"]
             WebAttach["Document Linker (/folderkoppel) & Web Mutations"]
@@ -103,7 +103,7 @@ flowchart TD
 - **Fail-Closed Design**: Rejections, timeouts, or missing biometric hardware immediately abort the tool call before touching the remote API.
 - **OS Keyring Integration**: Securely loads API tokens directly from Windows Credential Manager or macOS Keychain, eliminating plaintext tokens in `.env` files.
 
-### 4. Modular Web Session Bridge (8 Tools)
+### 4. Modular Web Session Bridge (12 Tools)
 - `get_unprocessed_bank_transactions`: Inspects unprocessed bank statements directly from e-Boekhouden's internal import grid.
 - `suggest_mutation_for_bank_statement`: Queries the internal suggestion engine for pre-filled booking parameters.
 - `list_archive_folders`: Lists Digital Archive folders (including Mail & Herken inbox folders) via `/v1/api/folder/directory`.
@@ -112,10 +112,14 @@ flowchart TD
 - `get_mutation_model_by_number`: Retrieves the editable web mutation model (`mutatie`, `mutatieRegels`, `folderKoppelId`) by mutation number (`nr`) via `/v1/api/mutatie/nr/{mutation_number}/model`.
 - `save_web_mutation`: Creates or updates a mutation in the web UI format via `POST /v1/api/mutatie`, gated by `enable_write_tools`, `confirm=True` / `confirm_write=True`, and biometric verification.
 - `attach_file_to_mutation`: Directly links uploaded digital archive receipts or invoices to journal mutations via `/v1/api/folderkoppel/koppel/item`.
+- `upload_archive_file`: Uploads a local file from disk directly into a Digital Archive folder via `POST /v1/api/folder/upload` without streaming Base64 through LLM arguments.
+- `move_archive_files`: Moves one or more Digital Archive files into a target folder via `POST /v1/api/folder/bulk/update/{target_folder_id}`.
+- `create_archive_folder`: Creates a new Digital Archive folder via `POST /v1/api/folder/directory`.
+- `delete_web_mutations`: Resolves mutation numbers (`nr`) to internal grid IDs via `POST /v1/api/mutatie/gridtable` and deletes them via `POST /v1/api/mutatie/bulk/delete`.
 
 ---
 
-## Tool Catalog (60 Tools)
+## Tool Catalog (64 Tools)
 
 | Category | Read Tools (Enabled by Default) | Write Tools (Gated by Double-Lock + Biometrics) |
 |---|---|---|
@@ -131,7 +135,7 @@ flowchart TD
 | **Financial Reports** | `get_trial_balance`, `get_profit_loss`, `get_balance_sheet`, `get_vat_summary`, `get_ar_ap_aging`, `get_ledger_transactions` | — |
 | **AI Bookkeeping Inbox** | `get_dutch_bookkeeping_rules`, `prepare_booking_proposal`, `suggest_transaction_classification` | — |
 | **Digital Archive** | — | `send_file_to_digital_archive` |
-| **Web Session Bridge** | `get_unprocessed_bank_transactions`, `suggest_mutation_for_bank_statement`, `list_archive_folders`, `list_archive_files`, `get_recognized_invoice_model`, `get_mutation_model_by_number` | `attach_file_to_mutation`, `save_web_mutation` |
+| **Web Session Bridge** | `get_unprocessed_bank_transactions`, `suggest_mutation_for_bank_statement`, `list_archive_folders`, `list_archive_files`, `get_recognized_invoice_model`, `get_mutation_model_by_number` | `attach_file_to_mutation`, `save_web_mutation`, `upload_archive_file`, `move_archive_files`, `create_archive_folder`, `delete_web_mutations` |
 
 ---
 
@@ -291,7 +295,7 @@ Requires Python 3.10+ and [`uv`](https://docs.astral.sh/uv/) or standard virtual
 
 ```bash
 # Clone the repository
-git clone https://github.com/matisup10/e-Boekhouden-MCP.git
+git clone https://github.com/hemelbesem90s/e-Boekhouden-MCP.git
 cd e-Boekhouden-MCP
 
 # Create virtual environment and install dependencies
@@ -327,7 +331,7 @@ eboekhouden-mcp --check-config
 pytest --cov
 ```
 
-All 149 unit and integration tests run fully mocked without contacting live API endpoints or requiring production secrets.
+All 155 unit and integration tests run fully mocked without contacting live API endpoints or requiring production secrets.
 
 ---
 

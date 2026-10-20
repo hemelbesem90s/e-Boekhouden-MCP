@@ -71,13 +71,17 @@ from eboekhouden_mcp.tools.constants import (
 )
 from eboekhouden_mcp.web_session.tools import (
     AttachFileToMutationTool,
+    CreateArchiveFolderTool,
+    DeleteWebMutationsTool,
     GetMutationModelByNumberTool,
     GetRecognizedInvoiceModelTool,
     GetUnprocessedBankTransactionsTool,
     ListArchiveFilesTool,
     ListArchiveFoldersTool,
+    MoveArchiveFilesTool,
     SaveWebMutationTool,
     SuggestMutationForBankStatementTool,
+    UploadArchiveFileTool,
 )
 
 
@@ -150,7 +154,7 @@ def register_all_tools(registry: ToolRegistry) -> None:
     registry.register(PrepareBookingProposalTool())
     registry.register(SuggestTransactionClassificationTool())
 
-    # Web session bridge (8 tools)
+    # Web session bridge (12 tools)
     registry.register(GetUnprocessedBankTransactionsTool())
     registry.register(SuggestMutationForBankStatementTool())
     registry.register(AttachFileToMutationTool())
@@ -159,6 +163,10 @@ def register_all_tools(registry: ToolRegistry) -> None:
     registry.register(GetRecognizedInvoiceModelTool())
     registry.register(GetMutationModelByNumberTool())
     registry.register(SaveWebMutationTool())
+    registry.register(MoveArchiveFilesTool())
+    registry.register(CreateArchiveFolderTool())
+    registry.register(UploadArchiveFileTool())
+    registry.register(DeleteWebMutationsTool())
 
 
 __all__ = [

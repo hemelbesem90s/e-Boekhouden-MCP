@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import base64
+import copy
 import json
+import random
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+
+
+REVERSE_CHARGE_BTW_CODES = frozenset({"BI_EU_INK", "BU_EU_INK", "VERL_INK"})
+CLOUD_PATH_PREFIXES = ("h:\\", "h:/", "//", "\\\\")
 
 
 class WebSessionError(Exception):
@@ -15,6 +23,67 @@ class WebSessionError(Exception):
 
 class SessionExpiredError(WebSessionError):
     """Raised when the e-Boekhouden web session token has expired or is invalid."""
+
+
+def _validate_local_file_path(file_path: str | Path) -> Path:
+    """Enforce fail-closed local file access (reject cloud drives / UNC paths)."""
+    raw_str = str(file_path).strip()
+    lower_str = raw_str.lower()
+    if any(lower_str.startswith(prefix) for prefix in CLOUD_PATH_PREFIXES) or "shared drives" in lower_str:
+        raise ValueError(
+            f"Refusing to read binary file from cloud/network path '{raw_str}'. "
+            "Copy or stage the file in a local directory (e.g. C:\\Temp\\ or scratch/) first."
+        )
+    path = Path(raw_str)
+    if not path.is_file():
+        raise FileNotFoundError(f"Local archive upload file not found: {raw_str}")
+    return path
+
+
+def normalize_web_mutation_payload(
+    payload: dict[str, Any], *, is_update: bool
+) -> dict[str, Any]:
+    """Sanitize a web mutation model payload to prevent MUT_026, MUT_112, MUT_117, and MutNr errors."""
+    normalized = copy.deepcopy(payload)
+    mutatie = normalized.get("mutatie")
+    if not isinstance(mutatie, dict):
+        return normalized
+
+    if not is_update:
+        if mutatie.get("nr") in (0, None, ""):
+            mutatie.pop("nr", None)
+        if not normalized.get("folderKoppelId"):
+            normalized["folderKoppelId"] = -random.randint(1, 1_000_000_000)
+    else:
+        if not normalized.get("folderKoppelId") and mutatie.get("nr"):
+            normalized["folderKoppelId"] = mutatie["nr"]
+
+    soort = mutatie.get("soort")
+    regels = normalized.get("mutatieRegels")
+    if isinstance(regels, list):
+        has_reverse_charge = False
+        for row in regels:
+            if not isinstance(row, dict):
+                continue
+            if row.get("kostenplaats") in (0, None, ""):
+                row.pop("kostenplaats", None)
+            if row.get("btwCode") in REVERSE_CHARGE_BTW_CODES:
+                has_reverse_charge = True
+            if soort in (3, 4):
+                open_post = row.pop("openPostModel", None) or {}
+                if not row.get("relatieId"):
+                    rel_id = open_post.get("relatieId") or mutatie.get("relatieId")
+                    if rel_id:
+                        row["relatieId"] = rel_id
+                if not row.get("factuur"):
+                    factuur = open_post.get("factuur") or mutatie.get("factuur")
+                    if factuur:
+                        row["factuur"] = str(factuur)
+                row.pop("kostenplaats", None)
+        if has_reverse_charge:
+            mutatie["inEx"] = "EX"
+
+    return normalized
 
 
 def parse_import_grid(raw_data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -101,6 +170,7 @@ class WebSessionClient:
             ),
         }
         if self.auth_token:
+            headers["Authorization"] = self.auth_token
             headers["Cookie"] = f"auth-token={self.auth_token}"
         return headers
 
@@ -121,6 +191,9 @@ class WebSessionClient:
             raise WebSessionError(
                 f"Web session API returned HTTP {response.status_code}: {body[:200]}"
             )
+
+        if not body.strip():
+            return {"success": True}
 
         try:
             data = response.json()
@@ -242,12 +315,104 @@ class WebSessionClient:
                 client.close()
 
     def save_web_mutation(self, payload: dict[str, Any]) -> Any:
-        """Create or update a mutation in the web UI format via POST /v1/api/mutatie."""
+        """Create (POST) or update (PUT) a mutation in the web UI format via /v1/api/mutatie."""
         url = f"{self.base_url}/v1/api/mutatie"
+        is_update = bool(payload.get("mutatie", {}).get("nr"))
+        normalized = normalize_web_mutation_payload(payload, is_update=is_update)
+        client = self._get_sync_client()
+        try:
+            if is_update:
+                resp = client.put(url, json=normalized, headers=self._get_headers())
+            else:
+                resp = client.post(url, json=normalized, headers=self._get_headers())
+            return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def move_archive_files(self, file_ids: list[int], target_folder_id: int) -> Any:
+        """Move files in the Digital Archive via POST /v1/api/folder/bulk/update/{target_folder_id}."""
+        url = f"{self.base_url}/v1/api/folder/bulk/update/{target_folder_id}"
+        client = self._get_sync_client()
+        try:
+            resp = client.post(url, json=file_ids, headers=self._get_headers())
+            return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def create_archive_folder(self, name: str, parent_folder_id: int = 0) -> Any:
+        """Create a Digital Archive folder via POST /v1/api/folder/directory."""
+        url = f"{self.base_url}/v1/api/folder/directory"
+        payload = {"parentFolderId": parent_folder_id, "name": name}
         client = self._get_sync_client()
         try:
             resp = client.post(url, json=payload, headers=self._get_headers())
             return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def upload_archive_file(
+        self,
+        file_path: str | Path,
+        folder_id: int = 0,
+        file_name: str | None = None,
+        overwrite: bool = True,
+    ) -> Any:
+        """Upload a local file to a Digital Archive folder via POST /v1/api/folder/upload."""
+        path = _validate_local_file_path(file_path)
+        resolved_name = file_name or path.name
+        b64_data = base64.b64encode(path.read_bytes()).decode("ascii")
+        url = f"{self.base_url}/v1/api/folder/upload"
+        payload = {
+            "fileName": resolved_name,
+            "data": b64_data,
+            "overwrite": overwrite,
+            "folderId": folder_id,
+        }
+        client = self._get_sync_client()
+        try:
+            resp = client.post(url, json=payload, headers=self._get_headers())
+            return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def delete_web_mutations(self, mutation_numbers: list[int]) -> dict[str, Any]:
+        """Resolve mutation numbers (nr) to internal grid IDs and delete via POST /v1/api/mutatie/bulk/delete."""
+        grid_url = f"{self.base_url}/v1/api/mutatie/gridtable"
+        del_url = f"{self.base_url}/v1/api/mutatie/bulk/delete"
+        client = self._get_sync_client()
+        try:
+            internal_ids: list[int] = []
+            resolved_map: dict[int, int] = {}
+            for nr in mutation_numbers:
+                resp = client.post(
+                    grid_url,
+                    json={"filter": {"nr": str(nr)}},
+                    headers=self._get_headers(),
+                )
+                grid_data = self._check_response(resp)
+                rows = grid_data.get("data", []) if isinstance(grid_data, dict) else []
+                for row in rows:
+                    if isinstance(row, list) and len(row) >= 2 and str(row[1]) == str(nr):
+                        internal_ids.append(int(row[0]))
+                        resolved_map[int(nr)] = int(row[0])
+                        break
+            if not internal_ids:
+                raise WebSessionError(
+                    f"No matching internal mutation IDs found for mutation_numbers={mutation_numbers}"
+                )
+            del_resp = client.post(
+                del_url, json=internal_ids, headers=self._get_headers()
+            )
+            del_result = self._check_response(del_resp)
+            return {
+                "mutation_numbers": mutation_numbers,
+                "resolved_ids": resolved_map,
+                "response": del_result,
+            }
         finally:
             if self._http is None:
                 client.close()
@@ -379,10 +544,57 @@ class WebSessionClient:
             return self._check_response(resp)
 
     async def async_save_web_mutation(self, payload: dict[str, Any]) -> Any:
-        """Async version of save_web_mutation."""
+        """Async version of save_web_mutation (POST for create, PUT when mutatie.nr is set)."""
         url = f"{self.base_url}/v1/api/mutatie"
+        is_update = bool(payload.get("mutatie", {}).get("nr"))
+        normalized = normalize_web_mutation_payload(payload, is_update=is_update)
         if self._async_http is not None:
-            resp = await self._async_http.post(url, json=payload, headers=self._get_headers())
+            if is_update:
+                resp = await self._async_http.put(url, json=normalized, headers=self._get_headers())
+            else:
+                resp = await self._async_http.post(url, json=normalized, headers=self._get_headers())
+            return self._check_response(resp)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            if is_update:
+                resp = await client.put(url, json=normalized)
+            else:
+                resp = await client.post(url, json=normalized)
+            return self._check_response(resp)
+
+    async def async_move_archive_files(
+        self, file_ids: list[int], target_folder_id: int
+    ) -> Any:
+        """Async version of move_archive_files."""
+        url = f"{self.base_url}/v1/api/folder/bulk/update/{target_folder_id}"
+        if self._async_http is not None:
+            resp = await self._async_http.post(
+                url, json=file_ids, headers=self._get_headers()
+            )
+            return self._check_response(resp)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.post(url, json=file_ids)
+            return self._check_response(resp)
+
+    async def async_create_archive_folder(
+        self, name: str, parent_folder_id: int = 0
+    ) -> Any:
+        """Async version of create_archive_folder."""
+        url = f"{self.base_url}/v1/api/folder/directory"
+        payload = {"parentFolderId": parent_folder_id, "name": name}
+        if self._async_http is not None:
+            resp = await self._async_http.post(
+                url, json=payload, headers=self._get_headers()
+            )
             return self._check_response(resp)
 
         async with httpx.AsyncClient(
@@ -392,4 +604,80 @@ class WebSessionClient:
         ) as client:
             resp = await client.post(url, json=payload)
             return self._check_response(resp)
+
+    async def async_upload_archive_file(
+        self,
+        file_path: str | Path,
+        folder_id: int = 0,
+        file_name: str | None = None,
+        overwrite: bool = True,
+    ) -> Any:
+        """Async version of upload_archive_file."""
+        path = _validate_local_file_path(file_path)
+        resolved_name = file_name or path.name
+        b64_data = base64.b64encode(path.read_bytes()).decode("ascii")
+        url = f"{self.base_url}/v1/api/folder/upload"
+        payload = {
+            "fileName": resolved_name,
+            "data": b64_data,
+            "overwrite": overwrite,
+            "folderId": folder_id,
+        }
+        if self._async_http is not None:
+            resp = await self._async_http.post(
+                url, json=payload, headers=self._get_headers()
+            )
+            return self._check_response(resp)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.post(url, json=payload)
+            return self._check_response(resp)
+
+    async def async_delete_web_mutations(
+        self, mutation_numbers: list[int]
+    ) -> dict[str, Any]:
+        """Async version of delete_web_mutations."""
+        grid_url = f"{self.base_url}/v1/api/mutatie/gridtable"
+        del_url = f"{self.base_url}/v1/api/mutatie/bulk/delete"
+
+        async def _execute_delete(client_obj: httpx.AsyncClient, use_headers: bool) -> dict[str, Any]:
+            hdrs = self._get_headers() if use_headers else None
+            internal_ids: list[int] = []
+            resolved_map: dict[int, int] = {}
+            for nr in mutation_numbers:
+                resp = await client_obj.post(
+                    grid_url, json={"filter": {"nr": str(nr)}}, headers=hdrs
+                )
+                grid_data = self._check_response(resp)
+                rows = grid_data.get("data", []) if isinstance(grid_data, dict) else []
+                for row in rows:
+                    if isinstance(row, list) and len(row) >= 2 and str(row[1]) == str(nr):
+                        internal_ids.append(int(row[0]))
+                        resolved_map[int(nr)] = int(row[0])
+                        break
+            if not internal_ids:
+                raise WebSessionError(
+                    f"No matching internal mutation IDs found for mutation_numbers={mutation_numbers}"
+                )
+            del_resp = await client_obj.post(del_url, json=internal_ids, headers=hdrs)
+            del_result = self._check_response(del_resp)
+            return {
+                "mutation_numbers": mutation_numbers,
+                "resolved_ids": resolved_map,
+                "response": del_result,
+            }
+
+        if self._async_http is not None:
+            return await _execute_delete(self._async_http, use_headers=True)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            return await _execute_delete(client, use_headers=False)
 

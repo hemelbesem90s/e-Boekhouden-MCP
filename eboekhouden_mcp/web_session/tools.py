@@ -335,3 +335,209 @@ class SaveWebMutationTool(BaseTool):
             "response": result,
         }
 
+
+class MoveArchiveFilesInput(ToolSchema):
+    """Input schema for move_archive_files."""
+
+    file_ids: list[int] = Field(
+        min_length=1, description="List of Digital Archive file IDs to move"
+    )
+    target_folder_id: int = Field(
+        ge=0, description="Target Digital Archive folder ID (0 for root)"
+    )
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for moving Digital Archive files",
+    )
+
+
+class MoveArchiveFilesTool(BaseTool):
+    """Move files between Digital Archive folders."""
+
+    name = "move_archive_files"
+    description = (
+        "Move one or more Digital Archive files into a target folder "
+        "via POST /v1/api/folder/bulk/update/{target_folder_id}."
+    )
+    input_schema = MoveArchiveFilesInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        file_ids = [int(fid) for fid in arguments["file_ids"]]
+        target_folder_id = int(arguments["target_folder_id"])
+        result = await web_client.async_move_archive_files(
+            file_ids=file_ids, target_folder_id=target_folder_id
+        )
+        return {
+            "success": True,
+            "target_folder_id": target_folder_id,
+            "file_ids": file_ids,
+            "response": result,
+        }
+
+
+class CreateArchiveFolderInput(ToolSchema):
+    """Input schema for create_archive_folder."""
+
+    name: str = Field(min_length=1, description="Name of the new Digital Archive folder")
+    parent_folder_id: int = Field(
+        default=0, ge=0, description="Parent folder ID (default 0 for root)"
+    )
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for creating a Digital Archive folder",
+    )
+
+
+class CreateArchiveFolderTool(BaseTool):
+    """Create a new folder in the Digital Archive."""
+
+    name = "create_archive_folder"
+    description = (
+        "Create a new folder in the Digital Archive via POST /v1/api/folder/directory."
+    )
+    input_schema = CreateArchiveFolderInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        name = str(arguments["name"])
+        parent_folder_id = int(arguments.get("parent_folder_id", 0))
+        result = await web_client.async_create_archive_folder(
+            name=name, parent_folder_id=parent_folder_id
+        )
+        return {
+            "success": True,
+            "name": name,
+            "parent_folder_id": parent_folder_id,
+            "response": result,
+        }
+
+
+class UploadArchiveFileInput(ToolSchema):
+    """Input schema for upload_archive_file."""
+
+    file_path: str = Field(
+        min_length=1,
+        description="Local filesystem path to the file to upload (must not be on a cloud/UNC drive)",
+    )
+    folder_id: int = Field(
+        default=0,
+        ge=0,
+        description="Target Digital Archive folder ID (default 0 for root)",
+    )
+    file_name: str | None = Field(
+        default=None,
+        description="Optional override filename in the Digital Archive (defaults to the local file basename)",
+    )
+    overwrite: bool = Field(
+        default=True,
+        description="Whether to overwrite an existing file with the same name in the folder",
+    )
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for uploading a Digital Archive file",
+    )
+
+
+class UploadArchiveFileTool(BaseTool):
+    """Upload a local file to a Digital Archive folder without streaming Base64 through the LLM."""
+
+    name = "upload_archive_file"
+    description = (
+        "Upload a local file directly from disk into a Digital Archive folder "
+        "via POST /v1/api/folder/upload without streaming Base64 payloads through tool arguments."
+    )
+    input_schema = UploadArchiveFileInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        file_path = str(arguments["file_path"])
+        folder_id = int(arguments.get("folder_id", 0))
+        file_name = arguments.get("file_name")
+        overwrite = bool(arguments.get("overwrite", True))
+        result = await web_client.async_upload_archive_file(
+            file_path=file_path,
+            folder_id=folder_id,
+            file_name=str(file_name) if file_name else None,
+            overwrite=overwrite,
+        )
+        return {
+            "success": True,
+            "file_path": file_path,
+            "folder_id": folder_id,
+            "response": result,
+        }
+
+
+class DeleteWebMutationsInput(ToolSchema):
+    """Input schema for delete_web_mutations."""
+
+    mutation_numbers: list[int] = Field(
+        min_length=1,
+        description="List of mutation numbers (mutatienummer / nr) to delete",
+    )
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for deleting mutations",
+    )
+
+
+class DeleteWebMutationsTool(BaseTool):
+    """Delete one or more mutations by mutation number (nr) via the web session API."""
+
+    name = "delete_web_mutations"
+    description = (
+        "Resolve mutation numbers (nr) to internal grid IDs via /v1/api/mutatie/gridtable "
+        "and delete them via POST /v1/api/mutatie/bulk/delete."
+    )
+    input_schema = DeleteWebMutationsInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        mutation_numbers = [int(nr) for nr in arguments["mutation_numbers"]]
+        result = await web_client.async_delete_web_mutations(
+            mutation_numbers=mutation_numbers
+        )
+        return {
+            "success": True,
+            **result,
+        }
+
+
+
