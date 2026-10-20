@@ -104,7 +104,7 @@ class WebSessionClient:
             headers["Cookie"] = f"auth-token={self.auth_token}"
         return headers
 
-    def _check_response(self, response: httpx.Response) -> dict[str, Any]:
+    def _check_response(self, response: httpx.Response) -> Any:
         """Validate response status and detect session expiration or upstream error envelopes."""
         body = response.text
         if response.status_code == 401:
@@ -196,6 +196,62 @@ class WebSessionClient:
             if self._http is None:
                 client.close()
 
+    def get_archive_folders(self) -> Any:
+        """Fetch Digital Archive folders via GET /v1/api/folder/directory."""
+        url = f"{self.base_url}/v1/api/folder/directory"
+        client = self._get_sync_client()
+        try:
+            resp = client.get(url, headers=self._get_headers())
+            return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def get_archive_files(self, folder_id: int, include_deleted: bool = False) -> Any:
+        """Fetch files and subfolders in a Digital Archive folder via GET /v1/api/folder/{folder_id}/filelist."""
+        inc_del = str(include_deleted).lower()
+        url = f"{self.base_url}/v1/api/folder/{folder_id}/filelist?includeDelete={inc_del}"
+        client = self._get_sync_client()
+        try:
+            resp = client.get(url, headers=self._get_headers())
+            return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def get_recognized_invoice_model(self, file_id: int) -> Any:
+        """Fetch internal AI OCR recognition model for a Digital Archive file via GET /v1/api/mutatie/folder/{file_id}/model."""
+        url = f"{self.base_url}/v1/api/mutatie/folder/{file_id}/model"
+        client = self._get_sync_client()
+        try:
+            resp = client.get(url, headers=self._get_headers())
+            return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def get_mutation_model_by_number(self, mutation_number: int) -> Any:
+        """Fetch full web mutation model for an existing mutation number via GET /v1/api/mutatie/nr/{mutation_number}/model."""
+        url = f"{self.base_url}/v1/api/mutatie/nr/{mutation_number}/model"
+        client = self._get_sync_client()
+        try:
+            resp = client.get(url, headers=self._get_headers())
+            return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def save_web_mutation(self, payload: dict[str, Any]) -> Any:
+        """Create or update a mutation in the web UI format via POST /v1/api/mutatie."""
+        url = f"{self.base_url}/v1/api/mutatie"
+        client = self._get_sync_client()
+        try:
+            resp = client.post(url, json=payload, headers=self._get_headers())
+            return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
     # ---------------- Async Methods ---------------- #
 
     async def async_get_import_grid(self, offset: int = 0, limit: int = 50) -> dict[str, Any]:
@@ -258,3 +314,82 @@ class WebSessionClient:
         ) as client:
             resp = await client.post(url, json=payload)
             return self._check_response(resp)
+
+    async def async_get_archive_folders(self) -> Any:
+        """Async version of get_archive_folders."""
+        url = f"{self.base_url}/v1/api/folder/directory"
+        if self._async_http is not None:
+            resp = await self._async_http.get(url, headers=self._get_headers())
+            return self._check_response(resp)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.get(url)
+            return self._check_response(resp)
+
+    async def async_get_archive_files(
+        self, folder_id: int, include_deleted: bool = False
+    ) -> Any:
+        """Async version of get_archive_files."""
+        inc_del = str(include_deleted).lower()
+        url = f"{self.base_url}/v1/api/folder/{folder_id}/filelist?includeDelete={inc_del}"
+        if self._async_http is not None:
+            resp = await self._async_http.get(url, headers=self._get_headers())
+            return self._check_response(resp)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.get(url)
+            return self._check_response(resp)
+
+    async def async_get_recognized_invoice_model(self, file_id: int) -> Any:
+        """Async version of get_recognized_invoice_model."""
+        url = f"{self.base_url}/v1/api/mutatie/folder/{file_id}/model"
+        if self._async_http is not None:
+            resp = await self._async_http.get(url, headers=self._get_headers())
+            return self._check_response(resp)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.get(url)
+            return self._check_response(resp)
+
+    async def async_get_mutation_model_by_number(self, mutation_number: int) -> Any:
+        """Async version of get_mutation_model_by_number."""
+        url = f"{self.base_url}/v1/api/mutatie/nr/{mutation_number}/model"
+        if self._async_http is not None:
+            resp = await self._async_http.get(url, headers=self._get_headers())
+            return self._check_response(resp)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.get(url)
+            return self._check_response(resp)
+
+    async def async_save_web_mutation(self, payload: dict[str, Any]) -> Any:
+        """Async version of save_web_mutation."""
+        url = f"{self.base_url}/v1/api/mutatie"
+        if self._async_http is not None:
+            resp = await self._async_http.post(url, json=payload, headers=self._get_headers())
+            return self._check_response(resp)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.post(url, json=payload)
+            return self._check_response(resp)
+

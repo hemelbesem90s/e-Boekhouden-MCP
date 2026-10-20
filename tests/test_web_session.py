@@ -20,7 +20,12 @@ from eboekhouden_mcp.web_session.client import (
 )
 from eboekhouden_mcp.web_session.tools import (
     AttachFileToMutationTool,
+    GetMutationModelByNumberTool,
+    GetRecognizedInvoiceModelTool,
     GetUnprocessedBankTransactionsTool,
+    ListArchiveFilesTool,
+    ListArchiveFoldersTool,
+    SaveWebMutationTool,
     SuggestMutationForBankStatementTool,
 )
 
@@ -159,19 +164,63 @@ def test_client_handles_validation_error_envelope():
 
 
 def test_client_sync_endpoints():
-    """Verify get_import_grid, get_mutatie_by_afschrift, and link_file_to_mutation."""
+    """Verify sync methods on WebSessionClient including Digital Archive & Mutation models."""
     requests_made: list[tuple[str, str, dict[str, Any] | None]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content) if request.content else None
         requests_made.append((request.method, str(request.url), body))
 
-        if "/v1/api/import/gridtable" in str(request.url):
+        url = str(request.url)
+        if "/v1/api/import/gridtable" in url:
             return httpx.Response(200, json={"rowCount": 1, "data": [[1, "2026-03-01", "IBAN1", "2026-03-01", -10.0, "Test", "", 1000, "", False, ""]]})
-        if "/v1/api/mutatie/getmutatiebyafschrift" in str(request.url):
+        if "/v1/api/mutatie/getmutatiebyafschrift" in url:
             return httpx.Response(200, json={"mutNr": 0, "suggestie": {"grootboekId": 201}})
-        if "/v1/api/folderkoppel/koppel/item" in str(request.url):
+        if "/v1/api/folderkoppel/koppel/item" in url:
             return httpx.Response(200, json={"success": True})
+        if "/v1/api/folder/directory" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 559261, "naam": "Inkoopfacturen (Mail & Herken)", "parentId": None, "isDeleted": False}
+                ],
+            )
+        if "/v1/api/folder/559261/filelist" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 1493990,
+                        "naam": "factuur-2026.pdf",
+                        "soort": "F",
+                        "menHStatus": 2,
+                        "koppelCount": 0,
+                        "datum": "2026-03-15",
+                        "size": 48120,
+                    }
+                ],
+            )
+        if "/v1/api/mutatie/folder/1493990/model" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "mutatie": {"soort": 1, "factuurnummer": "INV-900"},
+                    "mutatieRegels": [{"bedrag": 100.0, "btwCode": "HOOG_INK_21"}],
+                    "suggestedAiIban": "NL91ABNA0417164300",
+                    "suggestedAiBtwNr": "NL123456789B01",
+                },
+            )
+        if "/v1/api/mutatie/nr/281/model" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "mutatie": {"nr": 281, "soort": 1, "omschrijving": "Inkoop"},
+                    "mutatieRegels": [{"bedrag": 250.0, "btwCode": "HOOG_INK_21"}],
+                    "folderKoppelId": 1493990,
+                },
+            )
+        if request.method == "POST" and url.endswith("/v1/api/mutatie"):
+            return httpx.Response(200, json={"nr": 282, "saved": True})
 
         return httpx.Response(404)
 
@@ -200,17 +249,53 @@ def test_client_sync_endpoints():
         "koppelType": "MUT",
     }
 
+    # 4. Archive folders
+    folders = client.get_archive_folders()
+    assert len(folders) == 1
+    assert folders[0]["id"] == 559261
+
+    # 5. Archive files
+    files = client.get_archive_files(folder_id=559261, include_deleted=False)
+    assert len(files) == 1
+    assert files[0]["id"] == 1493990
+    assert "includeDelete=false" in requests_made[4][1]
+
+    # 6. Recognized invoice model
+    rec_model = client.get_recognized_invoice_model(file_id=1493990)
+    assert rec_model["suggestedAiIban"] == "NL91ABNA0417164300"
+
+    # 7. Mutation model by number
+    mut_model = client.get_mutation_model_by_number(mutation_number=281)
+    assert mut_model["mutatie"]["nr"] == 281
+    assert mut_model["folderKoppelId"] == 1493990
+
+    # 8. Save web mutation
+    save_res = client.save_web_mutation({"mutatie": {"soort": 1}, "mutatieRegels": []})
+    assert save_res["nr"] == 282
+    assert requests_made[7][0] == "POST"
+
 
 @pytest.mark.asyncio
 async def test_client_async_endpoints():
     """Verify async versions of WebSessionClient methods."""
     def handler(request: httpx.Request) -> httpx.Response:
-        if "/v1/api/import/gridtable" in str(request.url):
+        url = str(request.url)
+        if "/v1/api/import/gridtable" in url:
             return httpx.Response(200, json={"rowCount": 0, "data": []})
-        if "/v1/api/mutatie/getmutatiebyafschrift" in str(request.url):
+        if "/v1/api/mutatie/getmutatiebyafschrift" in url:
             return httpx.Response(200, json={"suggestie": {"rekening": "1000"}})
-        if "/v1/api/folderkoppel/koppel/item" in str(request.url):
+        if "/v1/api/folderkoppel/koppel/item" in url:
             return httpx.Response(200, json={"linked": True})
+        if "/v1/api/folder/directory" in url:
+            return httpx.Response(200, json=[{"id": 10, "naam": "Inbox"}])
+        if "/v1/api/folder/10/filelist" in url:
+            return httpx.Response(200, json=[{"id": 99, "naam": "doc.pdf", "menHStatus": 1}])
+        if "/v1/api/mutatie/folder/99/model" in url:
+            return httpx.Response(200, json={"mutatie": {"soort": 1}, "suggestedAiBtwNr": "NL001"})
+        if "/v1/api/mutatie/nr/281/model" in url:
+            return httpx.Response(200, json={"mutatie": {"nr": 281}, "folderKoppelId": 99})
+        if request.method == "POST" and url.endswith("/v1/api/mutatie"):
+            return httpx.Response(200, json={"nr": 300})
         return httpx.Response(404)
 
     async_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -224,6 +309,21 @@ async def test_client_async_endpoints():
 
     link = await client.async_link_file_to_mutation(mutation_id=10, file_id=20)
     assert link["linked"] is True
+
+    folders = await client.async_get_archive_folders()
+    assert folders[0]["id"] == 10
+
+    files = await client.async_get_archive_files(folder_id=10, include_deleted=True)
+    assert files[0]["id"] == 99
+
+    rec = await client.async_get_recognized_invoice_model(file_id=99)
+    assert rec["suggestedAiBtwNr"] == "NL001"
+
+    mut = await client.async_get_mutation_model_by_number(mutation_number=281)
+    assert mut["mutatie"]["nr"] == 281
+
+    saved = await client.async_save_web_mutation({"mutatie": {"soort": 1}})
+    assert saved["nr"] == 300
 
 
 # --------------------------------------------------------------------------- #
@@ -292,6 +392,105 @@ async def test_attach_file_to_mutation_tool():
     )
 
 
+@pytest.mark.asyncio
+async def test_list_archive_folders_tool():
+    """Test list_archive_folders MCP tool."""
+    mock_client = MagicMock(spec=WebSessionClient)
+    mock_client.async_get_archive_folders.return_value = [
+        {"id": 559261, "naam": "Inkoopfacturen", "parentId": None, "isDeleted": False}
+    ]
+
+    tool = ListArchiveFoldersTool(client=mock_client)
+    dummy_sdk_client = MagicMock()
+
+    result = await tool.execute(dummy_sdk_client, {})
+    assert result["count"] == 1
+    assert result["folders"][0]["id"] == 559261
+    mock_client.async_get_archive_folders.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_list_archive_files_tool():
+    """Test list_archive_files MCP tool."""
+    mock_client = MagicMock(spec=WebSessionClient)
+    mock_client.async_get_archive_files.return_value = [
+        {"id": 1493990, "naam": "inv.pdf", "soort": "F", "menHStatus": 2, "koppelCount": 0}
+    ]
+
+    tool = ListArchiveFilesTool(client=mock_client)
+    dummy_sdk_client = MagicMock()
+
+    result = await tool.execute(
+        dummy_sdk_client, {"folder_id": 559261, "include_deleted": False}
+    )
+    assert result["folder_id"] == 559261
+    assert result["count"] == 1
+    assert result["files"][0]["id"] == 1493990
+    mock_client.async_get_archive_files.assert_called_once_with(
+        folder_id=559261, include_deleted=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_recognized_invoice_model_tool():
+    """Test get_recognized_invoice_model MCP tool."""
+    mock_client = MagicMock(spec=WebSessionClient)
+    mock_client.async_get_recognized_invoice_model.return_value = {
+        "mutatie": {"soort": 1},
+        "mutatieRegels": [],
+        "suggestedAiIban": "NL91ABNA0417164300",
+        "suggestedAiBtwNr": "NL123456789B01",
+    }
+
+    tool = GetRecognizedInvoiceModelTool(client=mock_client)
+    dummy_sdk_client = MagicMock()
+
+    result = await tool.execute(dummy_sdk_client, {"file_id": 1493990})
+    assert result["suggestedAiIban"] == "NL91ABNA0417164300"
+    mock_client.async_get_recognized_invoice_model.assert_called_once_with(file_id=1493990)
+
+
+@pytest.mark.asyncio
+async def test_get_mutation_model_by_number_tool():
+    """Test get_mutation_model_by_number MCP tool."""
+    mock_client = MagicMock(spec=WebSessionClient)
+    mock_client.async_get_mutation_model_by_number.return_value = {
+        "mutatie": {"nr": 281, "soort": 1},
+        "mutatieRegels": [{"bedrag": 121.0}],
+        "folderKoppelId": 1493990,
+    }
+
+    tool = GetMutationModelByNumberTool(client=mock_client)
+    dummy_sdk_client = MagicMock()
+
+    result = await tool.execute(dummy_sdk_client, {"mutation_number": 281})
+    assert result["mutatie"]["nr"] == 281
+    assert result["folderKoppelId"] == 1493990
+    mock_client.async_get_mutation_model_by_number.assert_called_once_with(
+        mutation_number=281
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_web_mutation_tool():
+    """Test save_web_mutation MCP tool."""
+    mock_client = MagicMock(spec=WebSessionClient)
+    mock_client.async_save_web_mutation.return_value = {"nr": 285}
+
+    tool = SaveWebMutationTool(client=mock_client)
+    dummy_sdk_client = MagicMock()
+
+    payload = {
+        "mutatie": {"soort": 1, "datum": "2026-03-20"},
+        "mutatieRegels": [{"bedrag": 100.0, "btwCode": "HOOG_INK_21"}],
+        "folderKoppelId": 1493990,
+    }
+    result = await tool.execute(dummy_sdk_client, {"payload": payload})
+    assert result["success"] is True
+    assert result["response"]["nr"] == 285
+    mock_client.async_save_web_mutation.assert_called_once_with(payload=payload)
+
+
 # --------------------------------------------------------------------------- #
 # Configuration & Tool Enablement Policy tests
 # --------------------------------------------------------------------------- #
@@ -305,6 +504,11 @@ def test_server_web_session_policy():
     assert server_default.tool_is_enabled("get_unprocessed_bank_transactions") is False
     assert server_default.tool_is_enabled("suggest_mutation_for_bank_statement") is False
     assert server_default.tool_is_enabled("attach_file_to_mutation") is False
+    assert server_default.tool_is_enabled("list_archive_folders") is False
+    assert server_default.tool_is_enabled("list_archive_files") is False
+    assert server_default.tool_is_enabled("get_recognized_invoice_model") is False
+    assert server_default.tool_is_enabled("get_mutation_model_by_number") is False
+    assert server_default.tool_is_enabled("save_web_mutation") is False
 
     # 2. Web session enabled, read-only
     config_web = MCPConfig(
@@ -316,8 +520,13 @@ def test_server_web_session_policy():
     server_web = EBoekhoudenMCPServer(config_web)
     assert server_web.tool_is_enabled("get_unprocessed_bank_transactions") is True
     assert server_web.tool_is_enabled("suggest_mutation_for_bank_statement") is True
-    # attach_file_to_mutation is a write tool, so disabled without enable_write_tools
+    assert server_web.tool_is_enabled("list_archive_folders") is True
+    assert server_web.tool_is_enabled("list_archive_files") is True
+    assert server_web.tool_is_enabled("get_recognized_invoice_model") is True
+    assert server_web.tool_is_enabled("get_mutation_model_by_number") is True
+    # attach_file_to_mutation and save_web_mutation are write tools, so disabled without enable_write_tools
     assert server_web.tool_is_enabled("attach_file_to_mutation") is False
+    assert server_web.tool_is_enabled("save_web_mutation") is False
 
     # 3. Web session enabled with write tools
     config_web_write = MCPConfig(
@@ -330,4 +539,10 @@ def test_server_web_session_policy():
     server_web_write = EBoekhoudenMCPServer(config_web_write)
     assert server_web_write.tool_is_enabled("get_unprocessed_bank_transactions") is True
     assert server_web_write.tool_is_enabled("suggest_mutation_for_bank_statement") is True
+    assert server_web_write.tool_is_enabled("list_archive_folders") is True
+    assert server_web_write.tool_is_enabled("list_archive_files") is True
+    assert server_web_write.tool_is_enabled("get_recognized_invoice_model") is True
+    assert server_web_write.tool_is_enabled("get_mutation_model_by_number") is True
     assert server_web_write.tool_is_enabled("attach_file_to_mutation") is True
+    assert server_web_write.tool_is_enabled("save_web_mutation") is True
+

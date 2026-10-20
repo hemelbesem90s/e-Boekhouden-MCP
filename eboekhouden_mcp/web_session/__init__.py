@@ -9,7 +9,12 @@ from eboekhouden_mcp.web_session.client import (
 )
 from eboekhouden_mcp.web_session.tools import (
     AttachFileToMutationTool,
+    GetMutationModelByNumberTool,
+    GetRecognizedInvoiceModelTool,
     GetUnprocessedBankTransactionsTool,
+    ListArchiveFilesTool,
+    ListArchiveFoldersTool,
+    SaveWebMutationTool,
     SuggestMutationForBankStatementTool,
 )
 
@@ -22,4 +27,10 @@ __all__ = [
     "GetUnprocessedBankTransactionsTool",
     "SuggestMutationForBankStatementTool",
     "AttachFileToMutationTool",
+    "ListArchiveFoldersTool",
+    "ListArchiveFilesTool",
+    "GetRecognizedInvoiceModelTool",
+    "GetMutationModelByNumberTool",
+    "SaveWebMutationTool",
 ]
+

@@ -62,58 +62,22 @@ from eboekhouden_mcp.tools.inbox import (
     PrepareBookingProposalTool,
     SuggestTransactionClassificationTool,
 )
+from eboekhouden_mcp.tools.constants import (
+    ARCHIVE_TOOL_NAME,
+    DESTRUCTIVE_TOOL_NAMES,
+    INBOX_TOOL_NAMES,
+    WEB_SESSION_TOOL_NAMES,
+    WRITE_TOOL_NAMES,
+)
 from eboekhouden_mcp.web_session.tools import (
     AttachFileToMutationTool,
+    GetMutationModelByNumberTool,
+    GetRecognizedInvoiceModelTool,
     GetUnprocessedBankTransactionsTool,
+    ListArchiveFilesTool,
+    ListArchiveFoldersTool,
+    SaveWebMutationTool,
     SuggestMutationForBankStatementTool,
-)
-
-WRITE_TOOL_NAMES = frozenset(
-    {
-        "create_relation",
-        "update_relation",
-        "delete_relation",
-        "create_invoice",
-        "create_mutation",
-        "create_product",
-        "update_product",
-        "delete_product",
-        "create_ledger",
-        "update_ledger",
-        "create_cost_center",
-        "delete_cost_center",
-        "create_member",
-        "delete_member",
-        "send_file_to_digital_archive",
-        "attach_file_to_mutation",
-    }
-)
-
-DESTRUCTIVE_TOOL_NAMES = frozenset(
-    {
-        "delete_relation",
-        "delete_product",
-        "delete_cost_center",
-        "delete_member",
-    }
-)
-
-ARCHIVE_TOOL_NAME = "send_file_to_digital_archive"
-
-WEB_SESSION_TOOL_NAMES = frozenset(
-    {
-        "get_unprocessed_bank_transactions",
-        "suggest_mutation_for_bank_statement",
-        "attach_file_to_mutation",
-    }
-)
-
-INBOX_TOOL_NAMES = frozenset(
-    {
-        "get_dutch_bookkeeping_rules",
-        "prepare_booking_proposal",
-        "suggest_transaction_classification",
-    }
 )
 
 
@@ -186,10 +150,15 @@ def register_all_tools(registry: ToolRegistry) -> None:
     registry.register(PrepareBookingProposalTool())
     registry.register(SuggestTransactionClassificationTool())
 
-    # Web session bridge (3 tools)
+    # Web session bridge (8 tools)
     registry.register(GetUnprocessedBankTransactionsTool())
     registry.register(SuggestMutationForBankStatementTool())
     registry.register(AttachFileToMutationTool())
+    registry.register(ListArchiveFoldersTool())
+    registry.register(ListArchiveFilesTool())
+    registry.register(GetRecognizedInvoiceModelTool())
+    registry.register(GetMutationModelByNumberTool())
+    registry.register(SaveWebMutationTool())
 
 
 __all__ = [
@@ -203,3 +172,4 @@ __all__ = [
     "WEB_SESSION_TOOL_NAMES",
     "INBOX_TOOL_NAMES",
 ]
+

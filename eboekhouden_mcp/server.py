@@ -215,7 +215,11 @@ def create_server(config: MCPConfig | None = None) -> Server:
 
         execution_arguments = dict(arguments or {})
         if name in WRITE_TOOL_NAMES:
-            if execution_arguments.get(WRITE_CONFIRMATION_FIELD) is not True:
+            confirmed = (
+                execution_arguments.get(WRITE_CONFIRMATION_FIELD) is True
+                or execution_arguments.get("confirm_write") is True
+            )
+            if not confirmed:
                 return _error_result(
                     {
                         "error": "Explicit write confirmation required",
@@ -225,7 +229,8 @@ def create_server(config: MCPConfig | None = None) -> Server:
                         ),
                     }
                 )
-            execution_arguments.pop(WRITE_CONFIRMATION_FIELD)
+            execution_arguments.pop(WRITE_CONFIRMATION_FIELD, None)
+            execution_arguments.pop("confirm_write", None)
 
             if mcp_server.config.require_biometric:
                 prompt = format_write_prompt(name, execution_arguments)
