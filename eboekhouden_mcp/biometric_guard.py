@@ -131,28 +131,309 @@ def format_write_prompt(tool_name: str, arguments: dict[str, Any]) -> str:
 
 WINDOWS_USER_CONSENT_PS = r"""
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
 $null = [Windows.Security.Credentials.UI.UserConsentVerifier, Windows.Security.Credentials.UI, ContentType = WindowsRuntime]
 $null = [Windows.Security.Credentials.UI.UserConsentVerificationResult, Windows.Security.Credentials.UI, ContentType = WindowsRuntime]
+
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class Win32ConsentHelper
+{
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDPIAware();
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+
+    [DllImport("user32.dll")]
+    public static extern bool AllowSetForegroundWindow(int dwProcessId);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetWindowPos(
+        IntPtr hWnd,
+        IntPtr hWndInsertAfter,
+        int X,
+        int Y,
+        int cx,
+        int cy,
+        uint uFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr LoadLibrary(string lpFileName);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi)]
+    private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+
+    [DllImport("combase.dll", PreserveSig = true)]
+    private static extern int WindowsCreateString(
+        [MarshalAs(UnmanagedType.LPWStr)] string sourceString,
+        int length,
+        out IntPtr hstring);
+
+    [DllImport("combase.dll", PreserveSig = true)]
+    private static extern int WindowsDeleteString(IntPtr hstring);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int DllGetActivationFactoryDelegate(IntPtr activatableClassId, out IntPtr factory);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int RequestVerificationForWindowAsyncDelegate(
+        IntPtr thisPtr,
+        IntPtr appWindow,
+        IntPtr message,
+        ref Guid riid,
+        out IntPtr asyncOperation);
+
+    private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOACTIVATE = 0x0010;
+    private const uint SWP_SHOWWINDOW = 0x0040;
+    private const int ASFW_ANY = -1;
+    private const byte VK_MENU = 0x12;
+    private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+
+    public static void ForceForeground(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero) return;
+        IntPtr fg = GetForegroundWindow();
+        uint dummy;
+        uint fgThread = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out dummy) : 0;
+        uint curThread = GetCurrentThreadId();
+        bool attached = false;
+
+        try
+        {
+            keybd_event(VK_MENU, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, UIntPtr.Zero);
+            AllowSetForegroundWindow(ASFW_ANY);
+
+            if (fgThread != 0 && fgThread != curThread)
+            {
+                attached = AttachThreadInput(curThread, fgThread, true);
+            }
+
+            SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            BringWindowToTop(hWnd);
+            SetForegroundWindow(hWnd);
+            SwitchToThisWindow(hWnd, true);
+        }
+        finally
+        {
+            if (attached)
+            {
+                AttachThreadInput(curThread, fgThread, false);
+            }
+        }
+    }
+
+    public static IntPtr FindCredentialDialog()
+    {
+        IntPtr hWnd = FindWindow("Credential Dialog Xaml Host", null);
+        if (hWnd != IntPtr.Zero && IsWindowVisible(hWnd))
+        {
+            return hWnd;
+        }
+        hWnd = FindWindow("#32770", "Windows Security");
+        if (hWnd != IntPtr.Zero && IsWindowVisible(hWnd))
+        {
+            return hWnd;
+        }
+        return IntPtr.Zero;
+    }
+
+    public static bool ElevateCredentialDialog(ref bool alreadyFocused)
+    {
+        IntPtr credHwnd = FindCredentialDialog();
+        if (credHwnd == IntPtr.Zero) return false;
+
+        if (!alreadyFocused)
+        {
+            ForceForeground(credHwnd);
+            alreadyFocused = true;
+        }
+        else
+        {
+            SetWindowPos(credHwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+        return true;
+    }
+
+    public static object RequestForWindow(IntPtr hwnd, string prompt, Guid asyncOpIid)
+    {
+        IntPtr hMod = LoadLibrary(@"C:\Windows\System32\Windows.Security.Credentials.UI.UserConsentVerifier.dll");
+        if (hMod == IntPtr.Zero) return null;
+
+        IntPtr pFunc = GetProcAddress(hMod, "DllGetActivationFactory");
+        if (pFunc == IntPtr.Zero) return null;
+
+        var getFactory = (DllGetActivationFactoryDelegate)Marshal.GetDelegateForFunctionPointer(
+            pFunc, typeof(DllGetActivationFactoryDelegate));
+
+        IntPtr hClassId = IntPtr.Zero;
+        IntPtr hPrompt = IntPtr.Zero;
+        IntPtr factory = IntPtr.Zero;
+        IntPtr interopPtr = IntPtr.Zero;
+        IntPtr asyncOpPtr = IntPtr.Zero;
+
+        try
+        {
+            string cls = "Windows.Security.Credentials.UI.UserConsentVerifier";
+            if (WindowsCreateString(cls, cls.Length, out hClassId) != 0) return null;
+            if (getFactory(hClassId, out factory) != 0 || factory == IntPtr.Zero) return null;
+
+            Guid interopIid = new Guid("39E050C3-4E74-441A-8DC0-B81104DF949C");
+            if (Marshal.QueryInterface(factory, ref interopIid, out interopPtr) != 0 || interopPtr == IntPtr.Zero)
+                return null;
+
+            if (WindowsCreateString(prompt, prompt.Length, out hPrompt) != 0) return null;
+
+            IntPtr vtbl = Marshal.ReadIntPtr(interopPtr);
+            IntPtr methodPtr = Marshal.ReadIntPtr(vtbl, 6 * IntPtr.Size);
+            var reqFunc = (RequestVerificationForWindowAsyncDelegate)Marshal.GetDelegateForFunctionPointer(
+                methodPtr, typeof(RequestVerificationForWindowAsyncDelegate));
+
+            int hr = reqFunc(interopPtr, hwnd, hPrompt, ref asyncOpIid, out asyncOpPtr);
+            if (hr != 0 || asyncOpPtr == IntPtr.Zero) return null;
+
+            return Marshal.GetObjectForIUnknown(asyncOpPtr);
+        }
+        finally
+        {
+            if (asyncOpPtr != IntPtr.Zero) Marshal.Release(asyncOpPtr);
+            if (interopPtr != IntPtr.Zero) Marshal.Release(interopPtr);
+            if (factory != IntPtr.Zero) Marshal.Release(factory);
+            if (hPrompt != IntPtr.Zero) WindowsDeleteString(hPrompt);
+            if (hClassId != IntPtr.Zero) WindowsDeleteString(hClassId);
+        }
+    }
+}
+'@
 
 $prompt = $env:MCP_BIOMETRIC_PROMPT
 if (-not $prompt) {
     $prompt = "e-Boekhouden MCP Verification"
 }
 
-$op = [Windows.Security.Credentials.UI.UserConsentVerifier]::RequestVerificationAsync($prompt)
-$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
-    $_.Name -eq 'AsTask' -and
-    $_.GetParameters().Count -eq 1 -and
-    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
-})[0]
-$asTask = $asTaskGeneric.MakeGenericMethod([Windows.Security.Credentials.UI.UserConsentVerificationResult])
-$task = $asTask.Invoke($null, @($op))
-$task.Wait()
-$res = $task.Result.ToString()
-if ($res -eq 'Verified') {
-    Write-Output 'VerificationSucceeded'
-} else {
-    Write-Output $res
+[Win32ConsentHelper]::SetProcessDPIAware() | Out-Null
+
+$backdrop = $null
+$ownerForm = $null
+
+try {
+    $vScreen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    $activeScreen = [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position).Bounds
+
+    # UAC-style dimmed full-screen backdrop across all monitors
+    $backdrop = New-Object System.Windows.Forms.Form
+    $backdrop.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+    $backdrop.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+    $backdrop.Bounds = $vScreen
+    $backdrop.BackColor = [System.Drawing.Color]::Black
+    $backdrop.Opacity = 0.55
+    $backdrop.TopMost = $true
+    $backdrop.ShowInTaskbar = $false
+    $backdrop.Text = "e-Boekhouden Security Backdrop"
+    $backdrop.Add_MouseDown({
+        $cred = [Win32ConsentHelper]::FindCredentialDialog()
+        if ($cred -ne [IntPtr]::Zero) {
+            [Win32ConsentHelper]::ForceForeground($cred)
+        }
+    })
+
+    # TopMost owner anchor centered on the active monitor
+    $ownerForm = New-Object System.Windows.Forms.Form
+    $ownerForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+    $ownerForm.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+    $ownerForm.Size = New-Object System.Drawing.Size(1, 1)
+    $ownerForm.Location = New-Object System.Drawing.Point(
+        ($activeScreen.X + [int]($activeScreen.Width / 2)),
+        ($activeScreen.Y + [int]($activeScreen.Height / 2))
+    )
+    $ownerForm.BackColor = [System.Drawing.Color]::Black
+    $ownerForm.Opacity = 0.01
+    $ownerForm.TopMost = $true
+    $ownerForm.ShowInTaskbar = $false
+    $ownerForm.Owner = $backdrop
+
+    [System.Media.SystemSounds]::Exclamation.Play()
+
+    $backdrop.Show()
+    $ownerForm.Show()
+    [System.Windows.Forms.Application]::DoEvents()
+
+    [Win32ConsentHelper]::ForceForeground($ownerForm.Handle)
+    [System.Windows.Forms.Application]::DoEvents()
+
+    $retType = [Windows.Security.Credentials.UI.UserConsentVerifier].GetMethod("RequestVerificationAsync").ReturnType
+    $asyncOpGuid = [System.Runtime.InteropServices.Marshal]::GenerateGuidForType($retType)
+
+    $op = [Win32ConsentHelper]::RequestForWindow($ownerForm.Handle, $prompt, $asyncOpGuid)
+    if ($null -eq $op) {
+        $op = [Windows.Security.Credentials.UI.UserConsentVerifier]::RequestVerificationAsync($prompt)
+    }
+
+    $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+        $_.Name -eq 'AsTask' -and
+        $_.GetParameters().Count -eq 1 -and
+        $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+    })[0]
+    $asTask = $asTaskGeneric.MakeGenericMethod([Windows.Security.Credentials.UI.UserConsentVerificationResult])
+    $task = $asTask.Invoke($null, @($op))
+
+    $focusedDialog = $false
+    while (-not $task.IsCompleted) {
+        [System.Windows.Forms.Application]::DoEvents()
+        [Win32ConsentHelper]::ElevateCredentialDialog([ref]$focusedDialog) | Out-Null
+        Start-Sleep -Milliseconds 30
+    }
+
+    $res = $task.GetAwaiter().GetResult().ToString()
+    if ($res -eq 'Verified') {
+        Write-Output 'VerificationSucceeded'
+    } else {
+        Write-Output $res
+    }
+} finally {
+    if ($null -ne $ownerForm) {
+        $ownerForm.Close()
+        $ownerForm.Dispose()
+    }
+    if ($null -ne $backdrop) {
+        $backdrop.Close()
+        $backdrop.Dispose()
+    }
 }
 """
 
@@ -176,7 +457,17 @@ def verify_windows(prompt_message: str, timeout_seconds: int = 60) -> bool:
 
     try:
         proc = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_USER_CONSENT_PS],
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-Sta",
+                "-WindowStyle",
+                "Hidden",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                WINDOWS_USER_CONSENT_PS,
+            ],
             text=True,
             capture_output=True,
             check=False,

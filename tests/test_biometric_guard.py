@@ -205,6 +205,23 @@ def test_verify_windows_powershell_not_found():
         verify_windows("Test prompt")
 
 
+def test_verify_windows_topmost_presence_invocation():
+    from eboekhouden_mcp.biometric_guard import WINDOWS_USER_CONSENT_PS
+
+    with patch(
+        "subprocess.run", return_value=_mock_proc(stdout="VerificationSucceeded")
+    ) as mock_run:
+        assert verify_windows("High presence prompt") is True
+        cmd = mock_run.call_args[0][0]
+        assert "-Sta" in cmd
+        assert "-WindowStyle" in cmd
+        assert "Hidden" in cmd
+        assert "Win32ConsentHelper" in WINDOWS_USER_CONSENT_PS
+        assert "39E050C3-4E74-441A-8DC0-B81104DF949C" in WINDOWS_USER_CONSENT_PS
+        assert "Credential Dialog Xaml Host" in WINDOWS_USER_CONSENT_PS
+        assert "$backdrop.TopMost = $true" in WINDOWS_USER_CONSENT_PS
+
+
 # ============================================================================
 # 3. macOS verification tests
 # ============================================================================
