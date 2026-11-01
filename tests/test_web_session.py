@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -16,6 +17,7 @@ from eboekhouden_mcp.web_session.client import (
     SessionExpiredError,
     WebSessionClient,
     WebSessionError,
+    _validate_local_file_path,
     build_afschrift_params,
     normalize_web_mutation_payload,
     parse_import_grid,
@@ -689,6 +691,48 @@ def test_upload_archive_file_and_cloud_guard(tmp_path):
     # Cloud path must be rejected fail-closed
     with pytest.raises(ValueError, match="Refusing to read binary file from cloud"):
         client.upload_archive_file(file_path=r"H:\Shared drives\Invoices\test.pdf")
+
+
+@pytest.mark.parametrize(
+    "cloud_path",
+    [
+        "/Users/jacob/Library/CloudStorage/GoogleDrive-jacob@grobler.nl/My Drive/invoice.pdf",
+        "/Users/jacob/Library/Mobile Documents/com~apple~CloudDocs/receipt.pdf",
+        "/Volumes/Google Drive/My Drive/invoice.pdf",
+        r"H:\Shared drives\Invoices\test.pdf",
+        "h:/shared drives/invoices/test.pdf",
+        r"G:\My Drive\invoice.pdf",
+        "g:/my drive/invoice.pdf",
+        r"C:\Users\jacob\OneDrive\receipt.pdf",
+        "/Users/jacob/OneDrive/receipt.pdf",
+        r"C:\Users\jacob\Dropbox\receipt.pdf",
+        "/Users/jacob/Dropbox/receipt.pdf",
+        r"\\nas\share\invoice.pdf",
+        "//nas/share/invoice.pdf",
+    ],
+)
+def test_cloud_hydration_guard_rejects_virtual_mounts(cloud_path):
+    """Verify fail-closed rejection for all macOS, Windows, and UNC cloud paths."""
+    with pytest.raises(ValueError, match="Cloud Storage Hydration Protection"):
+        _validate_local_file_path(cloud_path)
+
+
+def test_cloud_hydration_guard_accepts_local_staging_paths(monkeypatch):
+    """Verify macOS and staging paths outside cloud mounts are accepted."""
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+
+    path1 = _validate_local_file_path("/tmp/eboekhouden_inbox/invoice.pdf")
+    assert path1 == Path("/tmp/eboekhouden_inbox/invoice.pdf")
+
+    path2 = _validate_local_file_path(
+        "/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/invoice.pdf"
+    )
+    assert path2 == Path(
+        "/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/invoice.pdf"
+    )
+
+    path3 = _validate_local_file_path(r"C:\Temp\invoice.pdf")
+    assert path3 == Path(r"C:\Temp\invoice.pdf")
 
 
 def test_delete_web_mutations():

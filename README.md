@@ -164,6 +164,18 @@ eboekhouden-mcp --test-biometric
 python -m eboekhouden_mcp.server --test-biometric
 ```
 
+### Cloud Storage Hydration Protection (Fail-Closed)
+
+To safeguard local virtual file provider sync engines from freezing or recursive file locks during automated archive processing, `upload_archive_file` enforces fail-closed path validation:
+- **Rejected Paths**:
+  - macOS File Provider cloud mounts (`~/Library/CloudStorage/...`, covering Google Drive `My Drive` & `Shared drives`, OneDrive, Dropbox, Box)
+  - macOS iCloud Drive (`~/Library/Mobile Documents/...`)
+  - macOS `/Volumes/Google Drive`
+  - Windows `H:\Shared drives`, `G:\`
+  - Cloud provider folders (`OneDrive`, `Dropbox`)
+  - UNC network shares (`\\...`, `//...`)
+- **Allowed Local Staging**: Binary documents must be copied or staged into local temporary directories (e.g. `/tmp`, `$TMPDIR` on macOS/Linux, or `C:\Temp\` on Windows) before uploading.
+
 ---
 
 ## Keyring Credential Store Setup
@@ -173,15 +185,21 @@ Rather than storing your API secret token in plaintext in `.env` files, use your
 ### Windows Credential Manager
 
 ```powershell
-# Store token securely in Windows Credential Manager
+# Store REST API token securely in Windows Credential Manager
 python -c "import keyring; keyring.set_password('eboekhouden_mcp', 'secret_token', 'your-secret-api-token-here')"
+
+# Optional: Store Web Session token for bank import grid & archive attachment linking
+python -c "import keyring; keyring.set_password('eboekhouden_mcp', 'web_session_token', 'your-web-session-token-here')"
 ```
 
 ### macOS Keychain
 
 ```bash
-# Store token securely in macOS Keychain
+# Store REST API token securely in macOS Keychain
 python3 -c "import keyring; keyring.set_password('eboekhouden_mcp', 'secret_token', 'your-secret-api-token-here')"
+
+# Optional: Store Web Session token for bank import grid & archive attachment linking
+python3 -c "import keyring; keyring.set_password('eboekhouden_mcp', 'web_session_token', 'your-web-session-token-here')"
 ```
 
 When configured, the MCP server automatically resolves the token on startup without requiring `EBOEKHOUDEN_MCP_SECRET_TOKEN` in the environment.
@@ -216,11 +234,24 @@ Settings are configured via environment variables or a `.env` file in the workin
 
 Add to your `mcp_config.json` (e.g. `~/.gemini/config/mcp_config.json`):
 
+**macOS / Linux:**
 ```json
 {
   "mcpServers": {
     "eboekhouden": {
-      "command": "/path/to/eboekhouden-mcp/.venv/Scripts/eboekhouden-mcp.exe",
+      "command": "/path/to/eboekhouden-mcp/.venv/bin/eboekhouden-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+**Windows:**
+```json
+{
+  "mcpServers": {
+    "eboekhouden": {
+      "command": "C:/path/to/eboekhouden-mcp/.venv/Scripts/eboekhouden-mcp.exe",
       "args": []
     }
   }
@@ -233,7 +264,7 @@ Or via Python module:
 {
   "mcpServers": {
     "eboekhouden": {
-      "command": "/path/to/eboekhouden-mcp/.venv/Scripts/python.exe",
+      "command": "/path/to/eboekhouden-mcp/.venv/bin/python",
       "args": ["-m", "eboekhouden_mcp.server"]
     }
   }

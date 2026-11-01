@@ -13,7 +13,22 @@ import httpx
 
 
 REVERSE_CHARGE_BTW_CODES = frozenset({"BI_EU_INK", "BU_EU_INK", "VERL_INK"})
-CLOUD_PATH_PREFIXES = ("h:\\", "h:/", "//", "\\\\")
+CLOUD_PATH_PREFIXES = (
+    "h:\\",
+    "h:/",
+    "g:\\",
+    "g:/",
+    "//",
+    "\\\\",
+)
+CLOUD_PATH_SUBSTRINGS = (
+    "/library/cloudstorage/",
+    "/library/mobile documents/",
+    "/volumes/google drive",
+    "shared drives",
+    "onedrive",
+    "dropbox",
+)
 
 
 class WebSessionError(Exception):
@@ -28,13 +43,18 @@ def _validate_local_file_path(file_path: str | Path) -> Path:
     """Enforce fail-closed local file access (reject cloud drives / UNC paths)."""
     raw_str = str(file_path).strip()
     lower_str = raw_str.lower()
-    if (
+    norm_slash = lower_str.replace("\\", "/")
+
+    is_cloud_path = (
         any(lower_str.startswith(prefix) for prefix in CLOUD_PATH_PREFIXES)
-        or "shared drives" in lower_str
-    ):
+        or any(sub in norm_slash for sub in CLOUD_PATH_SUBSTRINGS)
+    )
+
+    if is_cloud_path:
         raise ValueError(
-            f"Refusing to read binary file from cloud/network path '{raw_str}'. "
-            "Copy or stage the file in a local directory (e.g. C:\\Temp\\ or scratch/) first."
+            f"Refusing to read binary file from cloud/network path '{raw_str}' "
+            "(Cloud Storage Hydration Protection). "
+            "Copy or stage the file in a local directory (e.g. /tmp, $TMPDIR, or C:\\Temp\\) first."
         )
     path = Path(raw_str)
     if not path.is_file():
