@@ -28,6 +28,8 @@ def register_power_tools(registry: "ToolRegistry") -> None:
     from eboekhouden_mcp.tools.power.reports import (
         ArApAgingTool,
         BalanceSheetTool,
+        BudgetVsActualsTool,
+        CashFlowReportTool,
         LedgerTransactionsTool,
         ProfitLossTool,
         TrialBalanceTool,
@@ -51,6 +53,8 @@ def register_power_tools(registry: "ToolRegistry") -> None:
     registry.register(VatSummaryTool())
     registry.register(ArApAgingTool())
     registry.register(LedgerTransactionsTool())
+    registry.register(CashFlowReportTool())
+    registry.register(BudgetVsActualsTool())
 
 
 __all__ = ["register_power_tools"]

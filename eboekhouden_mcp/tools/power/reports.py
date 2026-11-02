@@ -483,3 +483,469 @@ class LedgerTransactionsTool(BaseTool):
             "truncated": scan_truncated or output_truncated,
             "items": rows,
         }
+
+
+# --------------------------------------------------------------------------- #
+# cash flow, reserve adequacy & safe-to-spend
+# --------------------------------------------------------------------------- #
+
+
+def _classify_reserve_type(code: str, description: str) -> str | None:
+    """Classify a FIN ledger as a specific reserve jar type, or None if operating."""
+    desc_low = (description or "").lower()
+    if any(k in desc_low for k in ("btw", "vat", "omzetbelasting")):
+        return "vat"
+    if any(k in desc_low for k in ("belasting", "tax", "inkomstenbelasting", "vpb")):
+        return "tax"
+    if any(k in desc_low for k in ("investering", "invest", "capex", "hardware")):
+        return "investment"
+    if any(k in desc_low for k in ("spaar", "reserve", "buffer", "potje", "jar")):
+        return "general"
+    return None
+
+
+class CashFlowReportInput(ToolSchema):
+    as_of: str | None = Field(
+        default=None,
+        description="Reference date (YYYY-MM-DD) for balances and aging. Defaults to today.",
+    )
+    from_date: str | None = Field(
+        default=None,
+        description="Start date (YYYY-MM-DD) for YTD net profit and tax accrual calculation. Defaults to Jan 1 of as_of year.",
+    )
+    operating_ledger_codes: list[str] | None = Field(
+        default=None,
+        description="Optional explicit ledger codes for main operating bank accounts (e.g. ['133000']).",
+    )
+    reserve_ledger_codes: list[str] | None = Field(
+        default=None,
+        description="Optional explicit ledger codes for reserve/jar accounts (e.g. ['133001', '133002', '133003']).",
+    )
+    effective_tax_rate: float = Field(
+        default=0.20,
+        ge=0.0,
+        le=0.60,
+        description="Estimated effective income/corporate tax rate on YTD net profit (default 0.20 = 20%).",
+    )
+    minimum_operating_buffer: float = Field(
+        default=2500.0,
+        ge=0.0,
+        description="Minimum safety floor to keep untouched in the main operating account (default EUR 2,500).",
+    )
+    monthly_fixed_commitments: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Next 30 days of recurring fixed commitments + owner draw to deduct when computing Safe-to-Spend.",
+    )
+
+
+class CashFlowReportTool(BaseTool):
+    """Liquid cash split (operating vs reserve jars), tax/VAT reserve adequacy, and Safe-to-Spend."""
+
+    name = "get_cash_flow"
+    description = (
+        "Cashflow & Safe-to-Spend report: separates main operating bank accounts from ring-fenced "
+        "reserve jars (VAT/BTW, Income Tax, Investment), checks whether tax/VAT jars cover accrued "
+        "liabilities, flags unallocated suspense balances (218200), and computes true Safe-to-Spend."
+    )
+    input_schema = CashFlowReportInput
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        as_of_date = _pdate(arguments.get("as_of")) or datetime.date.today()
+        from_date = _pdate(arguments.get("from_date")) or datetime.date(
+            as_of_date.year, 1, 1
+        )
+        op_codes = set(arguments.get("operating_ledger_codes") or [])
+        res_codes = set(arguments.get("reserve_ledger_codes") or [])
+        tax_rate = float(arguments.get("effective_tax_rate", 0.20))
+        min_buffer = float(arguments.get("minimum_operating_buffer", 2500.0))
+        fixed_commitments = float(arguments.get("monthly_fixed_commitments", 0.0))
+
+        # 1. Fetch relevant liquid (FIN), VAT (BTWRC/AF*/VOOR), and suspense (218200) ledgers
+        q_month = ((as_of_date.month - 1) // 3) * 3 + 1
+        q_start = datetime.date(as_of_date.year, q_month, 1)
+        q_end = datetime.date(as_of_date.year, 12, 31) if q_month == 10 else (
+            datetime.date(as_of_date.year, q_month + 3, 1) - datetime.timedelta(days=1)
+        )
+
+        vat_categories = {"BTWRC", "AF6", "AF19", "AFOVERIG", "VOOR"}
+        operating_accounts: list[dict[str, Any]] = []
+        reserve_accounts: list[dict[str, Any]] = []
+        suspense_accounts: list[dict[str, Any]] = []
+        cum_vat_credit = 0.0
+        qtr_vat_credit = 0.0
+        vw_rows: list[dict[str, Any]] = []
+
+        for ledger in client.ledgers.iter_all(limit=2000):
+            cat = ledger.category
+            code = str(ledger.code)
+            desc = str(ledger.description or "")
+            desc_low = desc.lower()
+
+            if cat == "FIN":
+                bal = round2(
+                    client.ledgers.get_balance(ledger.id, to_date=as_of_date).balance
+                )
+                row = {
+                    "ledger_id": ledger.id,
+                    "code": code,
+                    "description": desc,
+                    "category": cat,
+                    "balance": bal,
+                }
+                rtype = _classify_reserve_type(code, desc)
+                if code in op_codes:
+                    rtype = None
+                elif code in res_codes and rtype is None:
+                    rtype = "general"
+
+                if rtype is None:
+                    operating_accounts.append(row)
+                else:
+                    reserve_accounts.append({**row, "reserve_type": rtype})
+
+            elif cat in vat_categories:
+                bal_cum = float(
+                    client.ledgers.get_balance(ledger.id, to_date=as_of_date).balance
+                )
+                cum_vat_credit += -bal_cum
+                if cat != "BTWRC":
+                    bal_qtr = float(
+                        client.ledgers.get_balance(
+                            ledger.id, from_date=q_start, to_date=q_end
+                        ).balance
+                    )
+                    qtr_vat_credit += -bal_qtr
+
+            elif cat == "BAL":
+                is_suspense = code == "218200" or any(
+                    k in desc_low
+                    for k in ("rubriceren", "vraagpost", "suspense", "tussenrekening")
+                )
+                is_bal_vat = code in ("195700", "195010", "195020", "195300") or (
+                    code.startswith("195") and "btw" in desc_low
+                )
+                if is_suspense or is_bal_vat:
+                    bal = round2(
+                        client.ledgers.get_balance(
+                            ledger.id, to_date=as_of_date
+                        ).balance
+                    )
+                    if is_suspense and abs(bal) > 0.004:
+                        suspense_accounts.append(
+                            {
+                                "ledger_id": ledger.id,
+                                "code": code,
+                                "description": desc,
+                                "category": cat,
+                                "balance": bal,
+                            }
+                        )
+                    elif is_bal_vat:
+                        cum_vat_credit += -bal
+
+            elif cat == "VW":
+                bal = round2(
+                    client.ledgers.get_balance(
+                        ledger.id, from_date=from_date, to_date=as_of_date
+                    ).balance
+                )
+                vw_rows.append(
+                    {
+                        "ledger_id": ledger.id,
+                        "code": code,
+                        "description": desc,
+                        "category": cat,
+                        "balance": bal,
+                    }
+                )
+
+        accrued_vat_credit = max(cum_vat_credit, qtr_vat_credit)
+
+        operating_total = round2(sum(a["balance"] for a in operating_accounts))
+        reserve_total = round2(sum(a["balance"] for a in reserve_accounts))
+        total_liquid = round2(operating_total + reserve_total)
+
+        vat_jar_bal = round2(
+            sum(
+                a["balance"]
+                for a in reserve_accounts
+                if a.get("reserve_type") == "vat"
+            )
+        )
+        tax_jar_bal = round2(
+            sum(
+                a["balance"]
+                for a in reserve_accounts
+                if a.get("reserve_type") == "tax"
+            )
+        )
+        inv_jar_bal = round2(
+            sum(
+                a["balance"]
+                for a in reserve_accounts
+                if a.get("reserve_type") == "investment"
+            )
+        )
+
+        accrued_vat_payable = round2(max(0.0, accrued_vat_credit))
+        vat_shortfall = round2(max(0.0, accrued_vat_payable - vat_jar_bal))
+
+        ytd_revenue = round2(-sum(r["balance"] for r in vw_rows if r["balance"] < 0))
+        ytd_expense = round2(sum(r["balance"] for r in vw_rows if r["balance"] > 0))
+        ytd_net_profit = round2(ytd_revenue - ytd_expense)
+        estimated_tax = round2(max(0.0, ytd_net_profit * tax_rate))
+        tax_shortfall = round2(max(0.0, estimated_tax - tax_jar_bal))
+
+        open_ar = round2(
+            sum(
+                float(inv.outstanding_amount)
+                for inv in client.mutations.iter_outstanding("D")
+            )
+        )
+        open_ap = round2(
+            sum(
+                float(inv.outstanding_amount)
+                for inv in client.mutations.iter_outstanding("C")
+            )
+        )
+
+        immediate_safe = round2(
+            operating_total
+            - open_ap
+            - vat_shortfall
+            - fixed_commitments
+            - min_buffer
+        )
+        strict_safe = round2(immediate_safe - tax_shortfall)
+        projected_30d_safe = round2(strict_safe + open_ar)
+
+        return {
+            "as_of": as_of_date.isoformat(),
+            "from_date": from_date.isoformat(),
+            "liquid_accounts": {
+                "operating_accounts": operating_accounts,
+                "operating_total": operating_total,
+                "reserve_accounts": reserve_accounts,
+                "reserve_total": reserve_total,
+                "total_liquid_cash": total_liquid,
+            },
+            "suspense_accounts": suspense_accounts,
+            "reconciliation_clean": len(suspense_accounts) == 0,
+            "reserve_adequacy": {
+                "accrued_vat_payable": accrued_vat_payable,
+                "vat_reserve_balance": vat_jar_bal,
+                "vat_reserve_shortfall": vat_shortfall,
+                "ytd_net_profit": ytd_net_profit,
+                "effective_tax_rate": tax_rate,
+                "estimated_tax_liability": estimated_tax,
+                "tax_reserve_balance": tax_jar_bal,
+                "tax_reserve_shortfall": tax_shortfall,
+                "investment_reserve_balance": inv_jar_bal,
+            },
+            "open_ar_ap": {
+                "open_debtors_total": open_ar,
+                "open_creditors_total": open_ap,
+                "net_ar_ap": round2(open_ar - open_ap),
+            },
+            "safe_to_spend": {
+                "operating_cash_now": operating_total,
+                "less_open_creditors": open_ap,
+                "less_vat_reserve_shortfall": vat_shortfall,
+                "less_monthly_fixed_commitments": fixed_commitments,
+                "less_minimum_operating_buffer": min_buffer,
+                "immediate_safe_to_spend_from_operating": immediate_safe,
+                "less_tax_reserve_shortfall": tax_shortfall,
+                "strict_safe_to_spend_after_all_accruals": strict_safe,
+                "projected_30d_safe_to_spend_with_ar": projected_30d_safe,
+                "investment_jar_available": inv_jar_bal,
+            },
+        }
+
+
+# --------------------------------------------------------------------------- #
+# budget vs actuals & spend gate
+# --------------------------------------------------------------------------- #
+
+
+class BudgetEnvelopeSpec(ToolSchema):
+    name: str = Field(description="Budget envelope name (e.g. 'Software & AI')")
+    ledger_codes: list[str] = Field(
+        min_length=1,
+        description="Ledger codes mapped to this envelope (e.g. ['431400', '430400'])",
+    )
+    monthly_budget: float = Field(
+        ge=0.0, description="Target monthly budget in EUR (excl. VAT)"
+    )
+
+
+class BudgetVsActualsInput(ToolSchema):
+    from_date: str | None = Field(
+        default=None,
+        description="Budget period start (YYYY-MM-DD). Defaults to Jan 1 of current year.",
+    )
+    to_date: str | None = Field(
+        default=None,
+        description="Budget period end (YYYY-MM-DD). Defaults to today.",
+    )
+    envelopes: list[BudgetEnvelopeSpec] | None = Field(
+        default=None,
+        description="Optional list of budget envelopes mapping ledger_codes to monthly_budget.",
+    )
+    proposed_spend_amount: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Optional EUR amount (excl. VAT) of a purchase being evaluated against budget.",
+    )
+    proposed_spend_envelope: str | None = Field(
+        default=None,
+        description="Envelope name or ledger code for the proposed purchase.",
+    )
+
+
+class BudgetVsActualsTool(BaseTool):
+    """Compare actual P&L expenses against monthly/YTD budget envelopes and evaluate proposed spend."""
+
+    name = "get_budget_vs_actuals"
+    description = (
+        "Budget vs. Actuals & Spend Gate: compares YTD/period expense ledgers against target "
+        "monthly budget envelopes, reports remaining prorated and annual budget per category, "
+        "and evaluates whether a proposed purchase fits within budget."
+    )
+    input_schema = BudgetVsActualsInput
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        to_date = _pdate(arguments.get("to_date")) or datetime.date.today()
+        from_date = _pdate(arguments.get("from_date")) or datetime.date(
+            to_date.year, 1, 1
+        )
+        days_elapsed = max(1, (to_date - from_date).days + 1)
+        months_elapsed = round2(max(1.0, days_elapsed / 30.4375))
+
+        vw_rows = _ledger_balances(
+            client,
+            from_date=from_date,
+            to_date=to_date,
+            cost_center_id=None,
+            categories={"VW"},
+        )
+        revenue_total = round2(-sum(r["balance"] for r in vw_rows if r["balance"] < 0))
+        expense_rows = [r for r in vw_rows if r["balance"] > 0]
+        expense_by_code = {str(r["code"]): r for r in expense_rows}
+        expense_total = round2(sum(r["balance"] for r in expense_rows))
+
+        raw_envelopes = arguments.get("envelopes") or []
+        covered_codes: set[str] = set()
+        envelope_results: list[dict[str, Any]] = []
+
+        for env in raw_envelopes:
+            env_name = str(env["name"])
+            codes = [str(c) for c in env["ledger_codes"]]
+            covered_codes.update(codes)
+            m_budget = float(env["monthly_budget"])
+            prorated_budget = round2(m_budget * months_elapsed)
+            annual_budget = round2(m_budget * 12.0)
+            actual = round2(
+                sum(
+                    float(expense_by_code[c]["balance"])
+                    for c in codes
+                    if c in expense_by_code
+                )
+            )
+            rem_prorated = round2(prorated_budget - actual)
+            rem_annual = round2(annual_budget - actual)
+            util_pct = (
+                round2((actual / prorated_budget) * 100.0)
+                if prorated_budget > 0
+                else (100.0 if actual > 0 else 0.0)
+            )
+            if actual > prorated_budget:
+                status = "OVER_BUDGET"
+            elif util_pct >= 85.0:
+                status = "WATCH"
+            else:
+                status = "SAFE"
+
+            envelope_results.append(
+                {
+                    "name": env_name,
+                    "ledger_codes": codes,
+                    "monthly_budget": m_budget,
+                    "prorated_budget": prorated_budget,
+                    "annual_budget": annual_budget,
+                    "actual_spent": actual,
+                    "monthly_actual_avg": round2(actual / months_elapsed),
+                    "remaining_prorated": rem_prorated,
+                    "remaining_annual": rem_annual,
+                    "utilization_pct": util_pct,
+                    "status": status,
+                }
+            )
+
+        unbudgeted = [
+            {
+                **r,
+                "monthly_actual_avg": round2(float(r["balance"]) / months_elapsed),
+            }
+            for r in expense_rows
+            if str(r["code"]) not in covered_codes
+        ]
+
+        evaluation = None
+        prop_amt = arguments.get("proposed_spend_amount")
+        prop_target = arguments.get("proposed_spend_envelope")
+        if prop_amt is not None:
+            amt = float(prop_amt)
+            matched_env = None
+            if prop_target:
+                t_low = str(prop_target).lower()
+                for er in envelope_results:
+                    if (
+                        er["name"].lower() == t_low
+                        or t_low in er["name"].lower()
+                        or str(prop_target) in er["ledger_codes"]
+                    ):
+                        matched_env = er
+                        break
+            if matched_env is not None:
+                rem_p = round2(matched_env["remaining_prorated"] - amt)
+                rem_a = round2(matched_env["remaining_annual"] - amt)
+                evaluation = {
+                    "proposed_amount": amt,
+                    "envelope": matched_env["name"],
+                    "fits_prorated_budget": rem_p >= 0.0,
+                    "fits_annual_budget": rem_a >= 0.0,
+                    "remaining_prorated_after_spend": rem_p,
+                    "remaining_annual_after_spend": rem_a,
+                    "verdict": (
+                        "APPROVED_WITHIN_PRORATED_BUDGET"
+                        if rem_p >= 0.0
+                        else (
+                            "FITS_ANNUAL_BUT_EXCEEDS_YTD_PACE"
+                            if rem_a >= 0.0
+                            else "EXCEEDS_ANNUAL_BUDGET"
+                        )
+                    ),
+                }
+            else:
+                evaluation = {
+                    "proposed_amount": amt,
+                    "envelope": prop_target or "Unassigned",
+                    "verdict": "NO_MATCHING_ENVELOPE",
+                }
+
+        return {
+            "from_date": from_date.isoformat(),
+            "to_date": to_date.isoformat(),
+            "months_elapsed": months_elapsed,
+            "revenue_total": revenue_total,
+            "expense_total": expense_total,
+            "net_result": round2(revenue_total - expense_total),
+            "envelopes": envelope_results,
+            "unbudgeted_expenses": unbudgeted,
+            "proposed_spend_evaluation": evaluation,
+        }

@@ -13,6 +13,8 @@ from eboekhouden.models.mutation import (
 from eboekhouden_mcp.tools.power.reports import (
     ArApAgingTool,
     BalanceSheetTool,
+    BudgetVsActualsTool,
+    CashFlowReportTool,
     LedgerTransactionsTool,
     ProfitLossTool,
     TrialBalanceTool,
@@ -233,3 +235,123 @@ async def test_ledger_transactions_running_total():
     assert result["count"] == 1
     assert result["total"] == 300.0
     assert result["items"][0]["mutation_id"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# cash flow & budget vs actuals
+# --------------------------------------------------------------------------- #
+
+
+async def test_cash_flow_separates_operating_and_reserve_jars():
+    ledgers = [
+        LedgerListItem(id=1, code="133000", description="Bank", category="FIN"),
+        LedgerListItem(id=2, code="133001", description="Bank - BTW", category="FIN"),
+        LedgerListItem(
+            id=3, code="133002", description="Bank - Belasting", category="FIN"
+        ),
+        LedgerListItem(
+            id=4, code="133003", description="Bank - Investering", category="FIN"
+        ),
+        LedgerListItem(id=5, code="195700", description="BTW R/C", category="BAL"),
+        LedgerListItem(
+            id=6, code="218200", description="Nog te rubriceren", category="BAL"
+        ),
+        LedgerListItem(id=7, code="810200", description="Omzet hoog", category="VW"),
+        LedgerListItem(id=8, code="431400", description="Software", category="VW"),
+    ]
+    balances = {
+        1: LedgerBalance(code="133000", type="FIN", balance=3342.09),
+        2: LedgerBalance(code="133001", type="FIN", balance=1941.50),
+        3: LedgerBalance(code="133002", type="FIN", balance=5109.82),
+        4: LedgerBalance(code="133003", type="FIN", balance=909.34),
+        5: LedgerBalance(code="195700", type="BAL", balance=-2602.96),
+        6: LedgerBalance(code="218200", type="BAL", balance=0.0),
+        7: LedgerBalance(code="810200", type="VW", balance=-50000.0),
+        8: LedgerBalance(code="431400", type="VW", balance=20000.0),
+    }
+    outstanding = {
+        "D": [
+            OutstandingInvoice(
+                date="2026-10-15",
+                mutationId=10,
+                relationId=5,
+                company="Client",
+                totalAmount=10000.0,
+                paidAmount=0.0,
+                outstandingAmount=10000.0,
+            )
+        ],
+        "C": [
+            OutstandingInvoice(
+                date="2026-10-20",
+                mutationId=11,
+                relationId=6,
+                company="Supplier",
+                totalAmount=658.85,
+                paidAmount=0.0,
+                outstandingAmount=658.85,
+            )
+        ],
+    }
+    client = _FakeClient(
+        ledgers=_FakeLedgers(ledgers, balances),
+        mutations=_FakeMutations(outstanding=outstanding),
+    )
+
+    res = await CashFlowReportTool().execute(
+        client,
+        {
+            "as_of": "2026-11-02",
+            "effective_tax_rate": 0.20,
+            "minimum_operating_buffer": 2000.0,
+            "monthly_fixed_commitments": 0.0,
+        },
+    )
+    assert res["liquid_accounts"]["operating_total"] == 3342.09
+    assert res["liquid_accounts"]["reserve_total"] == 7960.66
+    assert res["liquid_accounts"]["total_liquid_cash"] == 11302.75
+    assert res["reconciliation_clean"] is True
+    assert res["reserve_adequacy"]["accrued_vat_payable"] == 2602.96
+    assert res["reserve_adequacy"]["vat_reserve_shortfall"] == 661.46
+    assert res["reserve_adequacy"]["ytd_net_profit"] == 30000.0
+    assert res["reserve_adequacy"]["estimated_tax_liability"] == 6000.0
+    assert res["reserve_adequacy"]["tax_reserve_shortfall"] == 890.18
+    assert res["safe_to_spend"]["investment_jar_available"] == 909.34
+
+
+async def test_budget_vs_actuals_and_spend_gate():
+    ledgers = [
+        LedgerListItem(id=7, code="810200", description="Omzet hoog", category="VW"),
+        LedgerListItem(id=8, code="431400", description="Software", category="VW"),
+    ]
+    balances = {
+        7: LedgerBalance(code="810200", type="VW", balance=-50000.0),
+        8: LedgerBalance(code="431400", type="VW", balance=1800.0),
+    }
+    client = _FakeClient(ledgers=_FakeLedgers(ledgers, balances))
+
+    res = await BudgetVsActualsTool().execute(
+        client,
+        {
+            "from_date": "2026-01-01",
+            "to_date": "2026-06-30",
+            "envelopes": [
+                {
+                    "name": "Software & AI",
+                    "ledger_codes": ["431400"],
+                    "monthly_budget": 400.0,
+                }
+            ],
+            "proposed_spend_amount": 300.0,
+            "proposed_spend_envelope": "Software & AI",
+        },
+    )
+    assert res["revenue_total"] == 50000.0
+    assert res["expense_total"] == 1800.0
+    env = res["envelopes"][0]
+    assert env["actual_spent"] == 1800.0
+    assert env["status"] == "SAFE"
+    assert (
+        res["proposed_spend_evaluation"]["verdict"]
+        == "APPROVED_WITHIN_PRORATED_BUDGET"
+    )

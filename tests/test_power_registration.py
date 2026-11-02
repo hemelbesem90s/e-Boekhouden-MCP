@@ -17,6 +17,8 @@ _POWER_TOOLS = {
     "get_vat_summary",
     "get_ar_ap_aging",
     "get_ledger_transactions",
+    "get_cash_flow",
+    "get_budget_vs_actuals",
 }
 
 

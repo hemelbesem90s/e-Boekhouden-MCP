@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10--3.13-3776AB?logo=python&logoColor=white" alt="Python 3.10 through 3.13">
-  <img src="https://img.shields.io/badge/MCP-stdio%20%7C%2067%20Tools-147D64" alt="MCP stdio 67 Tools">
+  <img src="https://img.shields.io/badge/MCP-stdio%20%7C%2069%20Tools-147D64" alt="MCP stdio 69 Tools">
   <img src="https://img.shields.io/badge/Biometric%20Gate-Windows%20Hello%20%7C%20Touch%20ID-blueviolet" alt="Biometric Hardware Gate">
   <img src="https://img.shields.io/badge/Credential%20Store-Keyring%20%2F%20Keychain-0078D4" alt="OS Keyring Integration">
   <img src="https://img.shields.io/badge/Coverage-82%25-brightgreen" alt="82% Test Coverage">
@@ -21,7 +21,7 @@
   <a href="#architectural-layers">Architecture</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#ai-client-configuration">AI assistants</a> ·
-  <a href="#tool-catalog-67-tools">Tool catalog</a> ·
+  <a href="#tool-catalog-69-tools">Tool catalog</a> ·
   <a href="#security--biometric-hardware-gate">Biometric security</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#credits--attribution">Credits & Attribution</a>
@@ -51,11 +51,11 @@ flowchart TD
         KeyringStore[("OS Keyring / Credential Manager\n(Zero-Plaintext Storage)")]
     end
 
-    subgraph MCPServer["e-Boekhouden Hybrid MCP Server (67 Tools)"]
+    subgraph MCPServer["e-Boekhouden Hybrid MCP Server (69 Tools)"]
         Registry["Tool Registry & Input Validation\n(Pydantic v2 Strict Bounds)"]
         
-        subgraph L1["Layer 1: Core REST v1 Engine (49 Tools)"]
-            RESTRead["34 Read Tools (Default)\n- Search & Batch Hydration\n- Financial Reports (Trial Balance, P&L, VAT, Aging)\n- Ledgers, Relations, Invoices, Mutations"]
+        subgraph L1["Layer 1: Core REST v1 & Power Reports (51 Tools)"]
+            RESTRead["36 Read Tools (Default)\n- Search & Batch Hydration\n- Financial Reports (Trial Balance, P&L, Cashflow, Budgets, VAT, Aging)\n- Ledgers, Relations, Invoices, Mutations"]
             RESTWrite["15 Opt-in Write Tools\n- Create / Update / Delete\n- Required 'confirm: true'"]
         end
 
@@ -122,7 +122,7 @@ flowchart TD
 
 ---
 
-## Tool Catalog (67 Tools)
+## Tool Catalog (69 Tools)
 
 | Category | Read Tools (Enabled by Default) | Write Tools (Gated by Double-Lock + Biometrics) |
 |---|---|---|
@@ -135,7 +135,7 @@ flowchart TD
 | **Members** | `list_members`, `get_member` | `create_member`, `delete_member` |
 | **Administration** | `list_administrations`, `list_linked_administrations` | — |
 | **Templates & Units**| `list_invoice_templates`, `list_email_templates`, `list_units` | — |
-| **Financial Reports** | `get_trial_balance`, `get_profit_loss`, `get_balance_sheet`, `get_vat_summary`, `get_ar_ap_aging`, `get_ledger_transactions` | — |
+| **Financial Reports** | `get_trial_balance`, `get_profit_loss`, `get_balance_sheet`, `get_vat_summary`, `get_ar_ap_aging`, `get_ledger_transactions`, `get_cash_flow`, `get_budget_vs_actuals` | — |
 | **AI Bookkeeping Inbox** | `get_dutch_bookkeeping_rules`, `prepare_booking_proposal`, `suggest_transaction_classification` | — |
 | **Digital Archive** | — | `send_file_to_digital_archive` |
 | **Web Session Bridge** | `get_unprocessed_bank_transactions`, `suggest_mutation_for_bank_statement`, `list_archive_folders`, `list_archive_files`, `get_recognized_invoice_model`, `get_mutation_model_by_number`, `list_time_entries`, `list_time_projects`, `list_time_activities` | `attach_file_to_mutation`, `save_web_mutation`, `upload_archive_file`, `move_archive_files`, `create_archive_folder`, `delete_web_mutations` |
