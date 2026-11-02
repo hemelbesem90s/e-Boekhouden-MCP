@@ -1,6 +1,8 @@
 """Configuration for the e-Boekhouden MCP server."""
 
 import os
+import subprocess  # nosec B404
+import sys
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -10,6 +12,67 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing_extensions import Self
 
 OFFICIAL_API_HOST = "api.e-boekhouden.nl"
+
+
+def set_keyring_secret(service_name: str, account: str, secret: str) -> None:
+    """Store a credential in OS keyring without triggering legacy macOS password prompts on read."""
+    cleaned = secret.strip()
+    if not cleaned:
+        raise ValueError(f"{account} must not be empty")
+
+    if sys.platform == "darwin" and os.path.exists("/usr/bin/security"):
+        # Delete any existing item first so its legacy partition ACL is replaced cleanly
+        subprocess.run(  # nosec B603
+            [
+                "/usr/bin/security",
+                "delete-generic-password",
+                "-s",
+                service_name,
+                "-a",
+                account,
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        proc = subprocess.run(  # nosec B603
+            [
+                "/usr/bin/security",
+                "add-generic-password",
+                "-U",
+                "-A",
+                "-s",
+                service_name,
+                "-a",
+                account,
+                "-w",
+                cleaned,
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if proc.returncode == 0:
+            return
+
+    import keyring
+
+    keyring.set_password(service_name, account, cleaned)
+
+
+def migrate_macos_keychain_acl(
+    service_name: str = "eboekhouden_mcp",
+) -> list[str]:
+    """Re-store existing macOS Keychain credentials with -A ACL to stop repeated password popups."""
+    import keyring
+
+    migrated: list[str] = []
+    for account in ("secret_token", "web_session_token"):
+        val = keyring.get_password(service_name, account)
+        if val and val.strip():
+            set_keyring_secret(service_name, account, val.strip())
+            migrated.append(account)
+    return migrated
 
 
 class MCPConfig(BaseSettings):

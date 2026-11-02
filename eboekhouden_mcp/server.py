@@ -21,7 +21,11 @@ from eboekhouden_mcp.biometric_guard import (
     format_write_prompt,
     verify_user_presence,
 )
-from eboekhouden_mcp.config import MCPConfig
+from eboekhouden_mcp.config import (
+    MCPConfig,
+    migrate_macos_keychain_acl,
+    set_keyring_secret,
+)
 from eboekhouden_mcp.tools import (
     ARCHIVE_TOOL_NAME,
     DESTRUCTIVE_TOOL_NAMES,
@@ -337,8 +341,38 @@ def main() -> None:
         action="store_true",
         help="test native OS biometric verification prompt",
     )
+    parser.add_argument(
+        "--fix-keychain-acl",
+        action="store_true",
+        help="migrate macOS Keychain items to non-prompting ACL so password popups are eliminated",
+    )
+    parser.add_argument(
+        "--set-secret-token",
+        metavar="TOKEN",
+        help="store secret_token in OS keyring with trusted ACL",
+    )
+    parser.add_argument(
+        "--set-web-token",
+        metavar="TOKEN",
+        help="store web_session_token in OS keyring with trusted ACL",
+    )
     parser.add_argument("--version", action="version", version="%(prog)s 0.2.0")
     args = parser.parse_args()
+
+    if args.set_secret_token:
+        set_keyring_secret("eboekhouden_mcp", "secret_token", args.set_secret_token)
+        print("Stored secret_token in keyring.")
+        return
+
+    if args.set_web_token:
+        set_keyring_secret("eboekhouden_mcp", "web_session_token", args.set_web_token)
+        print("Stored web_session_token in keyring.")
+        return
+
+    if args.fix_keychain_acl:
+        migrated = migrate_macos_keychain_acl("eboekhouden_mcp")
+        print(f"Migrated Keychain ACL for: {', '.join(migrated) or 'none'}")
+        return
 
     if args.test_biometric:
         prompt = "e-Boekhouden MCP: Biometric Verification Test"

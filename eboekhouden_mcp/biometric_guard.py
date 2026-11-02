@@ -514,10 +514,14 @@ let context = LAContext()
 var error: NSError?
 let reason = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "e-Boekhouden MCP Verification"
 
-if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {
+let policy: LAPolicy = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
+    ? .deviceOwnerAuthenticationWithBiometrics
+    : .deviceOwnerAuthentication
+
+if context.canEvaluatePolicy(policy, error: &error) {
     let semaphore = DispatchSemaphore(value: 0)
     var success = false
-    context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { (succ, err) in
+    context.evaluatePolicy(policy, localizedReason: reason) { (succ, err) in
         success = succ
         semaphore.signal()
     }
