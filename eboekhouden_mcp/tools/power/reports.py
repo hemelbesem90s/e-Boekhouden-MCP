@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 from pydantic import Field
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
 
 _SCAN_LIMIT_DEFAULT = 500
 _MAX_DETAILS_DEFAULT = 50
+_CONCURRENCY_WORKERS = 12
 
 
 # Local date parser (kept here so _helpers stays filter-focused).
@@ -48,26 +50,29 @@ def _ledger_balances(
     cost_center_id: int | None,
     categories: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for ledger in client.ledgers.iter_all(limit=2000):
-        if categories is not None and ledger.category not in categories:
-            continue
+    target_ledgers = [
+        ledger
+        for ledger in client.ledgers.iter_all(limit=2000)
+        if categories is None or ledger.category in categories
+    ]
+
+    def _fetch_one(ledger: Any) -> dict[str, Any]:
         balance = client.ledgers.get_balance(
             ledger.id,
             cost_center_id=cost_center_id,
             from_date=from_date,
             to_date=to_date,
         )
-        rows.append(
-            {
-                "ledger_id": ledger.id,
-                "code": ledger.code,
-                "description": ledger.description,
-                "category": ledger.category,
-                "balance": round2(balance.balance),
-            }
-        )
-    return rows
+        return {
+            "ledger_id": ledger.id,
+            "code": ledger.code,
+            "description": ledger.description,
+            "category": ledger.category,
+            "balance": round2(balance.balance),
+        }
+
+    with ThreadPoolExecutor(max_workers=_CONCURRENCY_WORKERS) as pool:
+        return list(pool.map(_fetch_one, target_ledgers))
 
 
 class _PeriodInput(ToolSchema):
@@ -260,8 +265,9 @@ class VatSummaryTool(BaseTool):
         selected = candidates[:max_details]
 
         totals: dict[str, float] = defaultdict(float)
-        for item in selected:
-            detail = client.mutations.get(item.id)
+        with ThreadPoolExecutor(max_workers=_CONCURRENCY_WORKERS) as pool:
+            details = list(pool.map(lambda it: client.mutations.get(it.id), selected))
+        for detail in details:
             vat_entries = detail.vat or []
             if vat_entries:
                 for entry in vat_entries:
@@ -583,16 +589,78 @@ class CashFlowReportTool(BaseTool):
         qtr_vat_credit = 0.0
         vw_rows: list[dict[str, Any]] = []
 
-        for ledger in client.ledgers.iter_all(limit=2000):
+        all_ledgers = list(client.ledgers.iter_all(limit=2000))
+
+        def _classify_ledger_task(ledger: Any) -> tuple[str, Any]:
             cat = ledger.category
             code = str(ledger.code)
             desc = str(ledger.description or "")
             desc_low = desc.lower()
-
             if cat == "FIN":
-                bal = round2(
+                return ("FIN", ledger)
+            if cat in vat_categories:
+                return ("VAT", ledger)
+            if cat == "BAL":
+                is_suspense = code == "218200" or any(
+                    k in desc_low
+                    for k in ("rubriceren", "vraagpost", "suspense", "tussenrekening")
+                )
+                is_bal_vat = code in ("195700", "195010", "195020", "195300") or (
+                    code.startswith("195") and "btw" in desc_low
+                )
+                if is_suspense:
+                    return ("BAL_SUSPENSE", ledger)
+                if is_bal_vat:
+                    return ("BAL_VAT", ledger)
+                return ("SKIP", ledger)
+            if cat == "VW":
+                return ("VW", ledger)
+            return ("SKIP", ledger)
+
+        tasks = [
+            t
+            for t in (_classify_ledger_task(lg) for lg in all_ledgers)
+            if t[0] != "SKIP"
+        ]
+
+        def _fetch_task(task: tuple[str, Any]) -> tuple[str, Any, float, float]:
+            kind, ledger = task
+            if kind == "VW":
+                bal = float(
+                    client.ledgers.get_balance(
+                        ledger.id, from_date=from_date, to_date=as_of_date
+                    ).balance
+                )
+                return (kind, ledger, bal, 0.0)
+            if kind == "VAT":
+                bal_cum = float(
                     client.ledgers.get_balance(ledger.id, to_date=as_of_date).balance
                 )
+                bal_qtr = (
+                    float(
+                        client.ledgers.get_balance(
+                            ledger.id, from_date=q_start, to_date=q_end
+                        ).balance
+                    )
+                    if ledger.category != "BTWRC"
+                    else 0.0
+                )
+                return (kind, ledger, bal_cum, bal_qtr)
+            bal = float(
+                client.ledgers.get_balance(ledger.id, to_date=as_of_date).balance
+            )
+            return (kind, ledger, bal, 0.0)
+
+        with ThreadPoolExecutor(max_workers=_CONCURRENCY_WORKERS) as pool:
+            fetched_results = list(pool.map(_fetch_task, tasks))
+
+        for kind, ledger, bal_primary, bal_secondary in fetched_results:
+            cat = ledger.category
+            code = str(ledger.code)
+            desc = str(ledger.description or "")
+
+            if kind == "FIN":
+                bal = round2(bal_primary)
                 row = {
                     "ledger_id": ledger.id,
                     "code": code,
@@ -611,59 +679,35 @@ class CashFlowReportTool(BaseTool):
                 else:
                     reserve_accounts.append({**row, "reserve_type": rtype})
 
-            elif cat in vat_categories:
-                bal_cum = float(
-                    client.ledgers.get_balance(ledger.id, to_date=as_of_date).balance
-                )
-                cum_vat_credit += -bal_cum
+            elif kind == "VAT":
+                cum_vat_credit += -bal_primary
                 if cat != "BTWRC":
-                    bal_qtr = float(
-                        client.ledgers.get_balance(
-                            ledger.id, from_date=q_start, to_date=q_end
-                        ).balance
-                    )
-                    qtr_vat_credit += -bal_qtr
+                    qtr_vat_credit += -bal_secondary
 
-            elif cat == "BAL":
-                is_suspense = code == "218200" or any(
-                    k in desc_low
-                    for k in ("rubriceren", "vraagpost", "suspense", "tussenrekening")
-                )
-                is_bal_vat = code in ("195700", "195010", "195020", "195300") or (
-                    code.startswith("195") and "btw" in desc_low
-                )
-                if is_suspense or is_bal_vat:
-                    bal = round2(
-                        client.ledgers.get_balance(
-                            ledger.id, to_date=as_of_date
-                        ).balance
+            elif kind == "BAL_SUSPENSE":
+                bal = round2(bal_primary)
+                if abs(bal) > 0.004:
+                    suspense_accounts.append(
+                        {
+                            "ledger_id": ledger.id,
+                            "code": code,
+                            "description": desc,
+                            "category": cat,
+                            "balance": bal,
+                        }
                     )
-                    if is_suspense and abs(bal) > 0.004:
-                        suspense_accounts.append(
-                            {
-                                "ledger_id": ledger.id,
-                                "code": code,
-                                "description": desc,
-                                "category": cat,
-                                "balance": bal,
-                            }
-                        )
-                    elif is_bal_vat:
-                        cum_vat_credit += -bal
 
-            elif cat == "VW":
-                bal = round2(
-                    client.ledgers.get_balance(
-                        ledger.id, from_date=from_date, to_date=as_of_date
-                    ).balance
-                )
+            elif kind == "BAL_VAT":
+                cum_vat_credit += -round2(bal_primary)
+
+            elif kind == "VW":
                 vw_rows.append(
                     {
                         "ledger_id": ledger.id,
                         "code": code,
                         "description": desc,
                         "category": cat,
-                        "balance": bal,
+                        "balance": round2(bal_primary),
                     }
                 )
 
