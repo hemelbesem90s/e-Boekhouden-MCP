@@ -20,20 +20,33 @@ if TYPE_CHECKING:
 def _resolve_web_client(
     client_override: WebSessionClient | None = None,
 ) -> WebSessionClient:
-    """Resolve an active WebSessionClient using injection or environment token."""
+    """Resolve an active WebSessionClient using injection, environment, or keyring."""
     if client_override is not None:
         return client_override
 
     token = os.environ.get("EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN") or os.environ.get(
         "EBOEKHOUDEN_WEB_SESSION_TOKEN", ""
     )
+    if not token:
+        service_name = os.environ.get(
+            "EBOEKHOUDEN_MCP_KEYRING_SERVICE", "eboekhouden_mcp"
+        )
+        try:
+            import keyring
+
+            keyring_token = keyring.get_password(service_name, "web_session_token")
+            if keyring_token and keyring_token.strip():
+                token = keyring_token.strip()
+        except Exception:  # nosec B110
+            pass
+
     base_url = os.environ.get(
         "EBOEKHOUDEN_MCP_WEB_SESSION_BASE_URL", "https://secure20.e-boekhouden.nl"
     )
     if not token:
         raise ValueError(
             "Web session token is not configured. Set EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN "
-            "or pass an authenticated WebSessionClient."
+            "or store web_session_token in keyring (service 'eboekhouden_mcp')."
         )
     return WebSessionClient(auth_token=token, base_url=base_url)
 
