@@ -32,11 +32,11 @@ def _resolve_web_client(
             "EBOEKHOUDEN_MCP_KEYRING_SERVICE", "eboekhouden_mcp"
         )
         try:
-            import keyring
+            from eboekhouden_mcp.config import get_keyring_secret
 
-            keyring_token = keyring.get_password(service_name, "web_session_token")
-            if keyring_token and keyring_token.strip():
-                token = keyring_token.strip()
+            keyring_token = get_keyring_secret(service_name, "web_session_token")
+            if keyring_token:
+                token = keyring_token
         except Exception:  # nosec B110
             pass
 
