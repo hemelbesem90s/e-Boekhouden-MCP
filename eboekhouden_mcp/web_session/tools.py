@@ -44,7 +44,11 @@ def _resolve_web_client(
     if client_override is not None:
         # If this is a live production client (no custom test transport injected),
         # refresh its token from keyring/env in case the user rotated web_session_token.
-        if client_override._http is None and client_override._async_http is None:
+        if (
+            isinstance(client_override, WebSessionClient)
+            and getattr(client_override, "_http", True) is None
+            and getattr(client_override, "_async_http", True) is None
+        ):
             live_token = _lookup_live_web_token()
             if live_token and live_token != client_override.auth_token:
                 client_override.set_token(live_token)

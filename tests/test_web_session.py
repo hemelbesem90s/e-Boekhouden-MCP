@@ -727,9 +727,7 @@ def test_cloud_hydration_guard_accepts_local_staging_paths(monkeypatch):
     path2 = _validate_local_file_path(
         "/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/invoice.pdf"
     )
-    assert path2 == Path(
-        "/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/invoice.pdf"
-    )
+    assert path2 == Path("/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/invoice.pdf")
 
     path3 = _validate_local_file_path(r"C:\Temp\invoice.pdf")
     assert path3 == Path(r"C:\Temp\invoice.pdf")
@@ -903,7 +901,11 @@ def test_get_time_entries_autopagination_and_summary():
                     ],
                     "data": [
                         [851957, "25011E_BCKE_SSB_Opmeten", "Baecke BV"],
-                        [842044, "26014S_MSTG_Kraker_Project_Support", "MST Groep B.V."],
+                        [
+                            842044,
+                            "26014S_MSTG_Kraker_Project_Support",
+                            "MST Groep B.V.",
+                        ],
                     ],
                 },
             )
@@ -951,6 +953,7 @@ def test_get_time_entries_autopagination_and_summary():
     # Also test live token refresh on non-mock WebSessionClient
     live_client = WebSessionClient(auth_token="stale-token")
     import os
+
     old_env = os.environ.get("EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN")
     try:
         os.environ["EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN"] = "fresh-rotated-token"
@@ -964,3 +967,204 @@ def test_get_time_entries_autopagination_and_summary():
         assert ListTimeEntriesTool.name == "list_time_entries"
         assert ListTimeProjectsTool.name == "list_time_projects"
         assert ListTimeActivitiesTool.name == "list_time_activities"
+
+
+@pytest.mark.asyncio
+async def test_async_web_session_client_and_time_tools():
+    """Verify async WebSessionClient methods via injected AsyncClient and time MCP tools."""
+    from eboekhouden_mcp.web_session.tools import (
+        CreateArchiveFolderTool,
+        ListTimeActivitiesTool,
+        ListTimeEntriesTool,
+        ListTimeProjectsTool,
+        MoveArchiveFilesTool,
+    )
+
+    col_meta = [
+        {"name": "id", "index": 0},
+        {"name": "datum", "index": 1},
+        {"name": "medewerker", "index": 2},
+        {"name": "projectId", "index": 3},
+        {"name": "project", "index": 4},
+        {"name": "activiteit", "index": 5},
+        {"name": "aantalUren", "index": 6},
+        {"name": "facturabel", "index": 7},
+        {"name": "uurtarief", "index": 8},
+        {"name": "factuur", "index": 9},
+        {"name": "aantalKilometers", "index": 10},
+        {"name": "kilometertarief", "index": 11},
+        {"name": "factuurId", "index": 12},
+        {"name": "opmerkingen", "index": 13},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/v1/api/import/gridtable" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "rowCount": 1,
+                    "colMetadata": [{"name": "id", "index": 0}],
+                    "data": [[101]],
+                },
+            )
+        if "/v1/api/mutatie/getmutatiebyafschrift" in url:
+            return httpx.Response(200, json={"tegenRekening": 4100})
+        if "/v1/api/folderkoppel/koppel/item" in url:
+            return httpx.Response(200, json={"linked": True})
+        if "/v1/api/folder/directory" in url:
+            if request.method == "POST":
+                return httpx.Response(200, json={"id": 999, "name": "NewFolder"})
+            return httpx.Response(200, json=[{"id": 1, "naam": "Root"}])
+        if "/filelist" in url:
+            return httpx.Response(200, json=[{"id": 10, "naam": "doc.pdf"}])
+        if "/v1/api/mutatie/folder/" in url:
+            return httpx.Response(200, json={"mutatie": {"soort": 1}})
+        if "/v1/api/mutatie/nr/" in url:
+            return httpx.Response(200, json={"mutatie": {"nr": 500}})
+        if "/v1/api/mutatie/gridtable" in url:
+            return httpx.Response(200, json={"data": [[90001, 42, "2026-01-13"]]})
+        if "/v1/api/mutatie/bulk/delete" in url:
+            return httpx.Response(200, json={"removedIds": [90001]})
+        if url.endswith("/v1/api/mutatie"):
+            return httpx.Response(200, json={"nr": 501})
+        if "/v1/api/folder/bulk/update/" in url:
+            return httpx.Response(200, json={"moved": True})
+        if "/v1/api/project/getall/" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 851957,
+                        "relatieId": 70666369,
+                        "naam": "25011E_BCKE_SSB_Opmeten",
+                        "actief": True,
+                        "facturabel": True,
+                    }
+                ],
+            )
+        if "/v1/api/project/gridtable" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "colMetadata": [
+                        {"name": "id", "index": 0},
+                        {"name": "relatie", "index": 1},
+                    ],
+                    "data": [[851957, "Baecke BV"]],
+                },
+            )
+        if "/v1/api/activiteit/getall/" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 629937,
+                        "naam": "Engineering_EU",
+                        "uurtarief": 75.0,
+                        "kilometertarief": 0.30,
+                        "btwCode": "BI_EU_VERK_D",
+                        "actief": True,
+                    }
+                ],
+            )
+        if "/v1/api/uur/factureren/gridtable" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "rowCount": 1,
+                    "colMetadata": col_meta,
+                    "data": [
+                        [
+                            1001,
+                            "2026-10-15T00:00:00",
+                            "JacobGrobler",
+                            851957,
+                            "25011E_BCKE_SSB_Opmeten",
+                            "Engineering_EU",
+                            4.0,
+                            "Ja",
+                            75.0,
+                            None,
+                            20.0,
+                            0.30,
+                            None,
+                            "Test async entry",
+                        ]
+                    ],
+                },
+            )
+        return httpx.Response(404)
+
+    async_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = WebSessionClient(auth_token="jwt-eb-token", async_http_client=async_http)
+
+    assert (await client.async_get_import_grid())["rowCount"] == 1
+    assert (await client.async_get_mutatie_by_afschrift({"id": 1}))[
+        "tegenRekening"
+    ] == 4100
+    assert (await client.async_link_file_to_mutation(1, 2))["linked"] is True
+    assert len(await client.async_get_archive_folders()) == 1
+    assert len(await client.async_get_archive_files(1)) == 1
+    assert "mutatie" in await client.async_get_recognized_invoice_model(10)
+    assert (await client.async_get_mutation_model_by_number(500))["mutatie"][
+        "nr"
+    ] == 500
+    assert (
+        await client.async_save_web_mutation(
+            {"mutatie": {"soort": 6}, "mutatieRegels": []}
+        )
+    )["nr"] == 501
+    assert (
+        await client.async_save_web_mutation(
+            {"mutatie": {"nr": 500, "soort": 6}, "mutatieRegels": []}
+        )
+    )["nr"] == 501
+    assert (await client.async_move_archive_files([10], 1))["moved"] is True
+    assert (await client.async_create_archive_folder("NewFolder"))["id"] == 999
+    assert (await client.async_delete_web_mutations([42]))["resolved_ids"] == {
+        42: 90001
+    }
+
+    # Test time tools via async client
+    dummy_sdk = MagicMock()
+    entries_tool = ListTimeEntriesTool(client=client)
+    res_entries = await entries_tool.execute(
+        dummy_sdk,
+        {
+            "status": "all",
+            "project_id": 851957,
+            "activity_id": 629937,
+            "period_start": "2026-10-01",
+            "period_end": "2026-10-31",
+            "include_non_billable": True,
+            "include_notes": True,
+            "max_rows": 50,
+        },
+    )
+    assert res_entries["summary"]["total_hours"] == 4.0
+    assert res_entries["summary"]["total_kilometers"] == 20.0
+
+    proj_tool = ListTimeProjectsTool(client=client)
+    res_proj = await proj_tool.execute(dummy_sdk, {"active_only": True})
+    assert res_proj["count"] == 1
+    assert res_proj["projects"][0]["relatie"] == "Baecke BV"
+
+    act_tool = ListTimeActivitiesTool(client=client)
+    res_act = await act_tool.execute(dummy_sdk, {"active_only": True})
+    assert res_act["count"] == 1
+    assert res_act["activities"][0]["naam"] == "Engineering_EU"
+
+    move_tool = MoveArchiveFilesTool(client=client)
+    res_move = await move_tool.execute(
+        dummy_sdk, {"file_ids": [10], "target_folder_id": 1}
+    )
+    assert res_move["success"] is True
+
+    mkdir_tool = CreateArchiveFolderTool(client=client)
+    res_mkdir = await mkdir_tool.execute(
+        dummy_sdk, {"name": "NewFolder", "parent_folder_id": 0}
+    )
+    assert res_mkdir["success"] is True
+
+    await async_http.aclose()

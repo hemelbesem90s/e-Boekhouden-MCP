@@ -352,6 +352,5 @@ async def test_budget_vs_actuals_and_spend_gate():
     assert env["actual_spent"] == 1800.0
     assert env["status"] == "SAFE"
     assert (
-        res["proposed_spend_evaluation"]["verdict"]
-        == "APPROVED_WITHIN_PRORATED_BUDGET"
+        res["proposed_spend_evaluation"]["verdict"] == "APPROVED_WITHIN_PRORATED_BUDGET"
     )

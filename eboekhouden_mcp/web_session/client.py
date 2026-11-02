@@ -45,10 +45,9 @@ def _validate_local_file_path(file_path: str | Path) -> Path:
     lower_str = raw_str.lower()
     norm_slash = lower_str.replace("\\", "/")
 
-    is_cloud_path = (
-        any(lower_str.startswith(prefix) for prefix in CLOUD_PATH_PREFIXES)
-        or any(sub in norm_slash for sub in CLOUD_PATH_SUBSTRINGS)
-    )
+    is_cloud_path = any(
+        lower_str.startswith(prefix) for prefix in CLOUD_PATH_PREFIXES
+    ) or any(sub in norm_slash for sub in CLOUD_PATH_SUBSTRINGS)
 
     if is_cloud_path:
         raise ValueError(
@@ -1022,7 +1021,9 @@ class WebSessionClient:
         getall_url = f"{self.base_url}/v1/api/project/getall/{active_flag}"
         grid_url = f"{self.base_url}/v1/api/project/gridtable?offset=0&limit=50&orderBy=&sortDirection=1"
 
-        async def _fetch(client_obj: httpx.AsyncClient, use_headers: bool) -> list[dict[str, Any]]:
+        async def _fetch(
+            client_obj: httpx.AsyncClient, use_headers: bool
+        ) -> list[dict[str, Any]]:
             hdrs = self._get_headers() if use_headers else None
             resp_all = await client_obj.get(getall_url, headers=hdrs)
             raw_all = self._check_response(resp_all)

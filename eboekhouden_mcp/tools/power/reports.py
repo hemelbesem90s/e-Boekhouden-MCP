@@ -566,8 +566,13 @@ class CashFlowReportTool(BaseTool):
         # 1. Fetch relevant liquid (FIN), VAT (BTWRC/AF*/VOOR), and suspense (218200) ledgers
         q_month = ((as_of_date.month - 1) // 3) * 3 + 1
         q_start = datetime.date(as_of_date.year, q_month, 1)
-        q_end = datetime.date(as_of_date.year, 12, 31) if q_month == 10 else (
-            datetime.date(as_of_date.year, q_month + 3, 1) - datetime.timedelta(days=1)
+        q_end = (
+            datetime.date(as_of_date.year, 12, 31)
+            if q_month == 10
+            else (
+                datetime.date(as_of_date.year, q_month + 3, 1)
+                - datetime.timedelta(days=1)
+            )
         )
 
         vat_categories = {"BTWRC", "AF6", "AF19", "AFOVERIG", "VOOR"}
@@ -670,16 +675,12 @@ class CashFlowReportTool(BaseTool):
 
         vat_jar_bal = round2(
             sum(
-                a["balance"]
-                for a in reserve_accounts
-                if a.get("reserve_type") == "vat"
+                a["balance"] for a in reserve_accounts if a.get("reserve_type") == "vat"
             )
         )
         tax_jar_bal = round2(
             sum(
-                a["balance"]
-                for a in reserve_accounts
-                if a.get("reserve_type") == "tax"
+                a["balance"] for a in reserve_accounts if a.get("reserve_type") == "tax"
             )
         )
         inv_jar_bal = round2(
@@ -713,11 +714,7 @@ class CashFlowReportTool(BaseTool):
         )
 
         immediate_safe = round2(
-            operating_total
-            - open_ap
-            - vat_shortfall
-            - fixed_commitments
-            - min_buffer
+            operating_total - open_ap - vat_shortfall - fixed_commitments - min_buffer
         )
         strict_safe = round2(immediate_safe - tax_shortfall)
         projected_30d_safe = round2(strict_safe + open_ar)
