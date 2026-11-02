@@ -69,25 +69,30 @@ class MCPConfig(BaseSettings):
         else:
             raw_token = str(token) if token is not None else ""  # noqa: F841
 
-        if token is None:
-            service_name = d.get(
-                "keyring_service_name",
-                os.environ.get("EBOEKHOUDEN_MCP_KEYRING_SERVICE", "eboekhouden_mcp"),
-            )
+        service_name = d.get(
+            "keyring_service_name",
+            os.environ.get("EBOEKHOUDEN_MCP_KEYRING_SERVICE", "eboekhouden_mcp"),
+        )
+        web_enabled = str(
+            d.get("enable_web_session")
+            or d.get("EBOEKHOUDEN_MCP_ENABLE_WEB_SESSION")
+            or os.environ.get("EBOEKHOUDEN_MCP_ENABLE_WEB_SESSION")
+            or ""
+        ).lower() in ("true", "1", "yes")
+        web_token = (
+            d.get("web_session_token")
+            or d.get("EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN")
+            or os.environ.get("EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN")
+        )
+
+        if token is None or (web_enabled and not web_token):
             try:
                 import keyring
 
-                keyring_token = keyring.get_password(service_name, "secret_token")
-                if keyring_token and keyring_token.strip():
-                    d["secret_token"] = keyring_token.strip()
-                web_enabled = str(
-                    d.get("enable_web_session")
-                    or d.get("EBOEKHOUDEN_MCP_ENABLE_WEB_SESSION")
-                    or ""
-                ).lower() in ("true", "1", "yes")
-                web_token = d.get("web_session_token") or d.get(
-                    "EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN"
-                )
+                if token is None:
+                    keyring_token = keyring.get_password(service_name, "secret_token")
+                    if keyring_token and keyring_token.strip():
+                        d["secret_token"] = keyring_token.strip()
                 if web_enabled and not web_token:
                     keyring_web_token = keyring.get_password(
                         service_name, "web_session_token"

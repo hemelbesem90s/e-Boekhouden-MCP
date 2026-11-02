@@ -169,3 +169,17 @@ class TestToolSchemas:
     def test_tool_inputs_reject_unknown_fields(self):
         with pytest.raises(ValidationError):
             ListRelationsInput(unexpected=True)
+
+    def test_unit_model_parses_singular_and_plural(self):
+        from eboekhouden.models.unit import UnitList
+
+        parsed = UnitList.model_validate(
+            {
+                "items": [{"id": 1, "singular": "uur", "plural": "uren"}],
+                "count": 1,
+            }
+        )
+        assert parsed.count == 1
+        assert parsed.items[0].singular == "uur"
+        assert parsed.items[0].plural == "uren"
+        assert parsed.items[0].description == "uur"

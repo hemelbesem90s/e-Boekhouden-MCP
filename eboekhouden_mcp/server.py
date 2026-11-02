@@ -286,7 +286,18 @@ def create_server(config: MCPConfig | None = None) -> Server:
                     "details": getattr(e, "details", None),
                 }
             )
-        except Exception:
+        except Exception as e:
+            from eboekhouden_mcp.web_session.client import WebSessionError
+
+            if isinstance(e, WebSessionError) or (
+                name in WEB_SESSION_TOOL_NAMES and isinstance(e, ValueError)
+            ):
+                return _error_result(
+                    {
+                        "error": str(e),
+                        "code": "WEB_SESSION_ERROR",
+                    }
+                )
             logger.exception("Unexpected error executing tool %s", name)
             return _error_result(
                 {
