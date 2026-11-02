@@ -1168,3 +1168,436 @@ async def test_async_web_session_client_and_time_tools():
     assert res_mkdir["success"] is True
 
     await async_http.aclose()
+
+
+# --------------------------------------------------------------------------- #
+# Quote (Offerte) Web Session Client & Tools tests
+# --------------------------------------------------------------------------- #
+
+
+def test_quote_helpers_and_sync_lifecycle():
+    """Verify date/status/ledger helpers and sync list/get/create/update/delete quote lifecycle."""
+    from eboekhouden_mcp.web_session.client import (
+        build_quote_line_payload,
+        format_eb_date_dict,
+        parse_eb_date_dict,
+        resolve_quote_status_id,
+        resolve_revenue_ledger_id,
+    )
+
+    assert parse_eb_date_dict("2026-11-02") == {"year": 2026, "month": 11, "day": 2}
+    assert parse_eb_date_dict("02-11-2026") == {"year": 2026, "month": 11, "day": 2}
+    assert parse_eb_date_dict({"year": 2026, "month": 9, "day": 4}) == {
+        "year": 2026,
+        "month": 9,
+        "day": 4,
+    }
+    assert format_eb_date_dict({"year": 2026, "month": 9, "day": 4}) == "2026-09-04"
+    assert format_eb_date_dict("2026-09-04T00:00:00") == "2026-09-04"
+    assert format_eb_date_dict(None) is None
+
+    statuses = [
+        {"id": 4027466, "status": "01. Ingevoerd"},
+        {"id": 4027467, "status": "02. Verzonden"},
+        {"id": 4027469, "status": "04. Geaccepteerd"},
+    ]
+    assert resolve_quote_status_id(statuses) == 4027466
+    assert resolve_quote_status_id(statuses, status="Verzonden") == 4027467
+    assert resolve_quote_status_id(statuses, status_id=4027469) == 4027469
+    with pytest.raises(ValueError, match="Unknown quote status"):
+        resolve_quote_status_id(statuses, status="NonExistent")
+
+    ledgers = [
+        {"id": 51798501, "code": "810200", "omschrijving": "omzet (btw hoog)"},
+        {
+            "id": 51798502,
+            "code": "810300",
+            "omschrijving": "omzet (buitenland binnen EU)",
+        },
+        {"id": 51798500, "code": "810100", "omschrijving": "omzet (btw laag)"},
+    ]
+    assert resolve_revenue_ledger_id(ledgers, vat_code="HOOG_VERK_21") == 51798501
+    assert resolve_revenue_ledger_id(ledgers, vat_code="BI_EU_VERK_D") == 51798502
+    assert resolve_revenue_ledger_id(ledgers, vat_code="LAAG_VERK_9") == 51798500
+    assert resolve_revenue_ledger_id(ledgers, ledger_id=810300) == 51798502
+    assert resolve_revenue_ledger_id(ledgers, ledger_id=51798501) == 51798501
+
+    line_ex = build_quote_line_payload(
+        {
+            "description": "FEM Structural Analysis",
+            "price_per_unit": 1000.0,
+            "quantity": 2.0,
+            "vat_code": "HOOG_VERK_21",
+            "cost_center_id": 486260,
+            "unit_id": 3192209,
+            "code": "ENG-01",
+            "discount": 10.0,
+        },
+        quote_id=2490022,
+        in_ex_vat="EX",
+        volgorde=1,
+        ledgers=ledgers,
+    )
+    assert line_ex["prijsExcl"] == 1000.0
+    assert line_ex["prijsIncl"] == 1210.0
+    assert line_ex["grootboekId"] == 51798501
+    assert line_ex["kostenplaatsId"] == 486260
+    assert line_ex["eenheidId"] == 3192209
+    assert line_ex["korting"] == 10.0
+
+    line_in = build_quote_line_payload(
+        {
+            "description": "Incl VAT item",
+            "price_per_unit": 121.0,
+            "vat_code": "HOOG_VERK_21",
+            "ledger_id": 51798501,
+        },
+        quote_id=2490022,
+        in_ex_vat="IN",
+        volgorde=2,
+    )
+    assert line_in["prijsIncl"] == 121.0
+    assert line_in["prijsExcl"] == 100.0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/v1/api/offertestatus" in url:
+            return httpx.Response(200, json=statuses)
+        if "/v1/api/offertesjabloon/selectlist" in url:
+            return httpx.Response(
+                200, json=[{"id": 907356, "naam": "Voorbeeld", "inactief": False}]
+            )
+        if "/v1/api/user/selectlist" in url:
+            return httpx.Response(200, json=[{"id": 1080456, "naam": "JacobGrobler"}])
+        if "/v1/api/offerte/nummer/next" in url:
+            return httpx.Response(200, json="OF-00002")
+        if "/v1/api/grootboekrekening/selectlist/actief/VWBAL" in url:
+            return httpx.Response(200, json=ledgers)
+        if "/v1/api/offerte/gridtable" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "rowCount": 1,
+                    "colMetadata": [
+                        {"name": "id", "index": 0},
+                        {"name": "nummer", "index": 1},
+                        {"name": "status", "index": 2},
+                        {"name": "totaalExcl", "index": 3},
+                        {"name": "totaalbtw", "index": 4},
+                        {"name": "totaalIncl", "index": 5},
+                    ],
+                    "data": [
+                        [2490022, "OF-00001", "01. Ingevoerd", 1000.0, 210.0, 1210.0]
+                    ],
+                },
+            )
+        if "/v1/api/offerte/dashboard/" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "nummer": "OF-00002",
+                    "status": "01. Ingevoerd",
+                    "relatieId": 70666369,
+                    "relatieCode": "BCKE",
+                    "relatieBedrijf": "Baecke BV",
+                    "inBehandelingBij": "JacobGrobler",
+                },
+            )
+        if "/v1/api/offerteregel/gridtable/" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "rowCount": 1,
+                    "colMetadata": [
+                        {"name": "id", "index": 0},
+                        {"name": "aantal", "index": 1},
+                        {"name": "omschrijving", "index": 2},
+                        {"name": "ppe", "index": 3},
+                        {"name": "regelTotaal", "index": 4},
+                        {"name": "btwCode", "index": 5},
+                    ],
+                    "data": [
+                        [5001, 10.0, "Engineering", 125.0, 1250.0, "BI_EU_VERK_D"]
+                    ],
+                },
+            )
+        if "/v1/api/offerteregel/" in url and request.method == "DELETE":
+            return httpx.Response(204, text="")
+        if url.endswith("/v1/api/offerteregel") and request.method == "POST":
+            return httpx.Response(200, json={"id": 5002})
+        if "/v1/api/folder/gekoppeldgridtable" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "rowCount": 1,
+                    "colMetadata": [
+                        {"name": "id", "index": 0},
+                        {"name": "naam", "index": 1},
+                    ],
+                    "data": [[1493990, "Quote_OF-00002.pdf"]],
+                },
+            )
+        if "/v1/api/folderkoppel/koppel/item" in url:
+            return httpx.Response(200, json={"linked": True})
+        if "/v1/api/offerte/" in url and request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "id": 2490023,
+                    "nummer": "OF-00002",
+                    "relatieId": 70666369,
+                    "statusId": 4027466,
+                    "sjabloonId": 907356,
+                    "behandelGebruikerId": 1080456,
+                    "datum": {"year": 2026, "month": 11, "day": 2},
+                    "vervaldatum": {"year": 2026, "month": 12, "day": 2},
+                    "inEx": "EX",
+                    "kenmerk": "26077I",
+                    "notitiePubliek": "Public note",
+                    "notitieIntern": "Internal note",
+                    "totaalExcl": 1250.0,
+                    "totaalBtw": 0.0,
+                    "totaalIncl": 1250.0,
+                },
+            )
+        if url.endswith("/v1/api/offerte") and request.method == "POST":
+            return httpx.Response(200, json={"id": 2490023})
+        if url.endswith("/v1/api/offerte") and request.method == "PUT":
+            return httpx.Response(204, text="")
+        if "/v1/api/offerte/" in url and request.method == "DELETE":
+            return httpx.Response(200, json=True)
+        return httpx.Response(404)
+
+    mock_http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = WebSessionClient(auth_token="jwt-eb-token", http_client=mock_http)
+
+    listed = client.list_quotes(relation_id=70666369)
+    assert listed["rowCount"] == 1
+    assert listed["summary"]["total_excl_vat"] == 1000.0
+    assert listed["metadata"]["next_quote_number"] == "OF-00002"
+
+    by_num = client.get_quote(quote_number="OF-00001")
+    assert by_num["quote_number"] == "OF-00002"
+    assert len(by_num["items"]) == 1
+    assert len(by_num["attached_files"]) == 1
+
+    created = client.create_quote(
+        relation_id=70666369,
+        reference="26077I",
+        items=[
+            {
+                "description": "Engineering",
+                "price_per_unit": 125.0,
+                "quantity": 10.0,
+                "vat_code": "BI_EU_VERK_D",
+            }
+        ],
+        archive_file_id=1493990,
+    )
+    assert created["id"] == 2490023
+    assert created["total_excl_vat"] == 1250.0
+
+    updated = client.update_quote(
+        quote_id=2490023,
+        status="Verzonden",
+        items=[
+            {
+                "description": "Updated Engineering",
+                "price_per_unit": 125.0,
+                "quantity": 12.0,
+                "vat_code": "BI_EU_VERK_D",
+            }
+        ],
+        replace_items=True,
+        archive_file_id=1493990,
+    )
+    assert updated["id"] == 2490023
+
+    deleted = client.delete_quote(2490023)
+    assert deleted["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_async_quote_tools():
+    """Verify async quote client methods and all 6 Quote MCP tools."""
+    from eboekhouden_mcp.web_session.tools import (
+        AttachFileToQuoteTool,
+        CreateQuoteTool,
+        DeleteQuoteTool,
+        GetQuoteInput,
+        GetQuoteTool,
+        ListQuotesTool,
+        UpdateQuoteTool,
+    )
+
+    with pytest.raises(ValueError, match="Either quote_id or quote_number"):
+        GetQuoteInput()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/v1/api/offertestatus" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 4027466, "status": "01. Ingevoerd"},
+                    {"id": 4027467, "status": "02. Verzonden"},
+                ],
+            )
+        if "/v1/api/offertesjabloon/selectlist" in url:
+            return httpx.Response(
+                200, json=[{"id": 907356, "naam": "Voorbeeld", "inactief": False}]
+            )
+        if "/v1/api/user/selectlist" in url:
+            return httpx.Response(200, json=[{"id": 1080456, "naam": "JacobGrobler"}])
+        if "/v1/api/offerte/nummer/next" in url:
+            return httpx.Response(200, json="OF-00003")
+        if "/v1/api/grootboekrekening/selectlist/actief/VWBAL" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 51798501,
+                        "code": "810200",
+                        "omschrijving": "omzet (btw hoog)",
+                    },
+                    {"id": 51798502, "code": "810300", "omschrijving": "omzet (EU)"},
+                ],
+            )
+        if "/v1/api/offerte/gridtable" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "rowCount": 1,
+                    "colMetadata": [
+                        {"name": "id", "index": 0},
+                        {"name": "nummer", "index": 1},
+                        {"name": "totaalExcl", "index": 2},
+                        {"name": "totaalbtw", "index": 3},
+                        {"name": "totaalIncl", "index": 4},
+                    ],
+                    "data": [[2490025, "OF-00003", 2500.0, 525.0, 3025.0]],
+                },
+            )
+        if "/v1/api/offerte/dashboard/" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "nummer": "OF-00003",
+                    "status": "02. Verzonden",
+                    "relatieId": 70666369,
+                    "relatieCode": "BCKE",
+                    "relatieBedrijf": "Baecke BV",
+                },
+            )
+        if "/v1/api/offerteregel/gridtable/" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "rowCount": 1,
+                    "colMetadata": [{"name": "id", "index": 0}],
+                    "data": [[6001]],
+                },
+            )
+        if "/v1/api/offerteregel/" in url and request.method == "DELETE":
+            return httpx.Response(204, text="")
+        if url.endswith("/v1/api/offerteregel") and request.method == "POST":
+            return httpx.Response(200, json={"id": 6002})
+        if "/v1/api/folder/gekoppeldgridtable" in url:
+            return httpx.Response(
+                200,
+                json={"rowCount": 0, "colMetadata": [], "data": []},
+            )
+        if "/v1/api/folderkoppel/koppel/item" in url:
+            return httpx.Response(200, json={"linked": True})
+        if "/v1/api/offerte/" in url and request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "id": 2490025,
+                    "nummer": "OF-00003",
+                    "relatieId": 70666369,
+                    "statusId": 4027467,
+                    "sjabloonId": 907356,
+                    "behandelGebruikerId": 1080456,
+                    "datum": {"year": 2026, "month": 11, "day": 2},
+                    "vervaldatum": {"year": 2026, "month": 12, "day": 2},
+                    "inEx": "EX",
+                    "totaalExcl": 2500.0,
+                    "totaalBtw": 525.0,
+                    "totaalIncl": 3025.0,
+                },
+            )
+        if url.endswith("/v1/api/offerte") and request.method == "POST":
+            return httpx.Response(200, json={"id": 2490025})
+        if url.endswith("/v1/api/offerte") and request.method == "PUT":
+            return httpx.Response(204, text="")
+        if "/v1/api/offerte/" in url and request.method == "DELETE":
+            return httpx.Response(200, json=True)
+        return httpx.Response(404)
+
+    async_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = WebSessionClient(auth_token="jwt-eb-token", async_http_client=async_http)
+    dummy_sdk = MagicMock()
+
+    list_res = await ListQuotesTool(client=client).execute(
+        dummy_sdk, {"relation_id": 70666369, "include_metadata": True}
+    )
+    assert list_res["rowCount"] == 1
+    assert list_res["quotes"][0]["nummer"] == "OF-00003"
+
+    get_res = await GetQuoteTool(client=client).execute(
+        dummy_sdk, {"quote_number": "OF-00003"}
+    )
+    assert get_res["id"] == 2490025
+
+    create_res = await CreateQuoteTool(client=client).execute(
+        dummy_sdk,
+        {
+            "relation_id": 70666369,
+            "status": "Verzonden",
+            "reference": "26077I",
+            "items": [
+                {
+                    "description": "Engineering package",
+                    "price_per_unit": 2500.0,
+                    "quantity": 1.0,
+                    "vat_code": "HOOG_VERK_21",
+                }
+            ],
+            "archive_file_id": 1493990,
+        },
+    )
+    assert create_res["success"] is True
+    assert create_res["quote"]["id"] == 2490025
+
+    update_res = await UpdateQuoteTool(client=client).execute(
+        dummy_sdk,
+        {
+            "quote_id": 2490025,
+            "status": "Verzonden",
+            "items": [
+                {
+                    "description": "Revised Engineering package",
+                    "price_per_unit": 2500.0,
+                    "quantity": 1.0,
+                    "vat_code": "HOOG_VERK_21",
+                }
+            ],
+            "replace_items": True,
+            "archive_file_id": 1493990,
+        },
+    )
+    assert update_res["success"] is True
+
+    attach_res = await AttachFileToQuoteTool(client=client).execute(
+        dummy_sdk, {"quote_id": 2490025, "file_id": 1493990}
+    )
+    assert attach_res["success"] is True
+
+    del_res = await DeleteQuoteTool(client=client).execute(
+        dummy_sdk, {"quote_id": 2490025}
+    )
+    assert del_res["success"] is True
+    assert del_res["deleted"] is True
+
+    await async_http.aclose()

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from eboekhouden_mcp.tools.base import BaseTool, ToolSchema
 from eboekhouden_mcp.web_session.client import (
@@ -731,4 +731,496 @@ class ListTimeActivitiesTool(BaseTool):
         return {
             "count": len(activities),
             "activities": activities,
+        }
+
+
+class ListQuotesInput(ToolSchema):
+    """Input schema for list_quotes."""
+
+    offset: int = Field(
+        default=0, ge=0, description="Offset for pagination (0 or greater)"
+    )
+    limit: int = Field(
+        default=50, ge=1, le=500, description="Maximum items to return (1-500)"
+    )
+    quote_number: str | None = Field(
+        default=None, description="Filter by quote number (e.g. 'OF-00001')"
+    )
+    relation_id: int | None = Field(
+        default=None, ge=1, description="Filter by client relation ID"
+    )
+    status_id: int | None = Field(
+        default=None, ge=1, description="Filter by quote status ID"
+    )
+    assigned_user_id: int | None = Field(
+        default=None, ge=1, description="Filter by assigned user ID (inBehandelingBij)"
+    )
+    date_from: str | None = Field(
+        default=None, description="Filter quote date from (YYYY-MM-DD)"
+    )
+    date_to: str | None = Field(
+        default=None, description="Filter quote date to (YYYY-MM-DD)"
+    )
+    expiration_from: str | None = Field(
+        default=None, description="Filter expiration date from (YYYY-MM-DD)"
+    )
+    expiration_to: str | None = Field(
+        default=None, description="Filter expiration date to (YYYY-MM-DD)"
+    )
+    include_metadata: bool = Field(
+        default=True,
+        description="Include available quote statuses, templates, users, and next quote number",
+    )
+
+
+class ListQuotesTool(BaseTool):
+    """List quotes (offertes) in e-Boekhouden with optional filters and metadata."""
+
+    name = "list_quotes"
+    description = (
+        "List quotes (offertes) from e-Boekhouden (/v1/api/offerte/gridtable) with optional "
+        "filters for quote number, client relation, status, assigned user, and dates, plus "
+        "available quote statuses, templates, and next quote number."
+    )
+    input_schema = ListQuotesInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        return await web_client.async_list_quotes(
+            offset=int(arguments.get("offset", 0)),
+            limit=int(arguments.get("limit", 50)),
+            quote_number=arguments.get("quote_number"),
+            relation_id=arguments.get("relation_id"),
+            status_id=arguments.get("status_id"),
+            assigned_user_id=arguments.get("assigned_user_id"),
+            date_from=arguments.get("date_from"),
+            date_to=arguments.get("date_to"),
+            expiration_from=arguments.get("expiration_from"),
+            expiration_to=arguments.get("expiration_to"),
+            include_metadata=bool(arguments.get("include_metadata", True)),
+        )
+
+
+class GetQuoteInput(ToolSchema):
+    """Input schema for get_quote."""
+
+    quote_id: int | None = Field(
+        default=None, ge=1, description="Internal quote (offerte) ID"
+    )
+    quote_number: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Quote number (e.g. 'OF-00001') if quote_id is not known",
+    )
+
+    @model_validator(mode="after")
+    def _require_id_or_number(self) -> "GetQuoteInput":
+        if self.quote_id is None and not (
+            self.quote_number and self.quote_number.strip()
+        ):
+            raise ValueError("Either quote_id or quote_number must be provided.")
+        return self
+
+
+class GetQuoteTool(BaseTool):
+    """Get full details of a quote (offerte) by ID or quote number."""
+
+    name = "get_quote"
+    description = (
+        "Get full details of an e-Boekhouden quote (offerte) by quote_id or quote_number, "
+        "including header metadata, line items (offerteregel), financial totals, and attached Digital Archive files."
+    )
+    input_schema = GetQuoteInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        return await web_client.async_get_quote(
+            quote_id=arguments.get("quote_id"),
+            quote_number=arguments.get("quote_number"),
+        )
+
+
+class QuoteItemInput(ToolSchema):
+    """Input schema for a quote (offerte) line item."""
+
+    description: str = Field(
+        min_length=1,
+        max_length=8000,
+        description="Line item description (omschrijving)",
+    )
+    price_per_unit: float = Field(
+        description="Price per unit (excl. VAT when in_ex_vat='EX', incl. VAT when in_ex_vat='IN')"
+    )
+    quantity: float = Field(default=1.0, description="Quantity (aantal, default 1.0)")
+    vat_code: str = Field(
+        default="HOOG_VERK_21",
+        description="VAT code (e.g. 'HOOG_VERK_21', 'BI_EU_VERK_D', 'BU_EU_VERK', 'LAAG_VERK_9', 'VERL_VERK', 'GEEN')",
+    )
+    ledger_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Revenue ledger ID or code (auto-resolved from vat_code if omitted, e.g. 810200 / 810300)",
+    )
+    cost_center_id: int | None = Field(
+        default=None, ge=1, description="Optional cost center ID (kostenplaatsId)"
+    )
+    unit_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional unit ID (eenheidId, e.g. uur/stuk/km)",
+    )
+    code: str | None = Field(
+        default=None,
+        max_length=20,
+        description="Optional item/article code (max 20 chars)",
+    )
+    product_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional standard product/service ID (artikelId)",
+    )
+    discount: float | None = Field(
+        default=None, description="Optional discount (korting) percentage or amount"
+    )
+    discount_is_percentage: bool = Field(
+        default=True,
+        description="Whether discount is a percentage (true) or fixed amount (false)",
+    )
+
+
+class CreateQuoteInput(ToolSchema):
+    """Input schema for create_quote."""
+
+    relation_id: int = Field(ge=1, description="Relation (customer) ID")
+    items: list[QuoteItemInput] | None = Field(
+        default=None,
+        max_length=500,
+        description="Quote line items (optional; each item has description, price_per_unit, quantity, vat_code, etc.)",
+    )
+    quote_number: str | None = Field(
+        default=None,
+        max_length=50,
+        description="Custom quote number (auto-generated via /v1/api/offerte/nummer/next if omitted)",
+    )
+    date: str | None = Field(
+        default=None, description="Quote date (YYYY-MM-DD, defaults to today)"
+    )
+    expiration_date: str | None = Field(
+        default=None,
+        description="Expiration date (YYYY-MM-DD, defaults to quote date + expiration_days)",
+    )
+    expiration_days: int = Field(
+        default=30,
+        ge=0,
+        le=3650,
+        description="Default validity period in days if expiration_date is omitted (default 30)",
+    )
+    status_id: int | None = Field(
+        default=None, ge=1, description="Optional quote status ID (offertestatus)"
+    )
+    status: str | None = Field(
+        default=None,
+        description=(
+            "Optional status name/substring (e.g. 'Ingevoerd', 'Verzonden', 'Wacht op antwoord', "
+            "'Geaccepteerd', 'Gefactureerd'). Defaults to '01. Ingevoerd'."
+        ),
+    )
+    template_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional quote template ID (offertesjabloon, defaults to first active template)",
+    )
+    assigned_user_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional assigned user ID (behandelGebruikerId, defaults to primary user)",
+    )
+    in_ex_vat: Literal["EX", "IN"] = Field(
+        default="EX",
+        description="'EX' for VAT exclusive (default) or 'IN' for VAT inclusive",
+    )
+    reference: str | None = Field(
+        default=None,
+        max_length=50,
+        description="Customer reference / project UPID (kenmerk, max 50 chars)",
+    )
+    public_note: str | None = Field(
+        default=None,
+        max_length=15000,
+        description="Customer-facing note (notitiePubliek, max 15000 chars)",
+    )
+    internal_note: str | None = Field(
+        default=None,
+        max_length=15000,
+        description="Internal accounting/commercial note (notitieIntern, max 15000 chars)",
+    )
+    archive_file_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional Digital Archive file ID (e.g. uploaded branded PDF offer) to link to this quote",
+    )
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for creating a quote",
+    )
+
+
+class CreateQuoteTool(BaseTool):
+    """Create a commercial quote (offerte) in e-Boekhouden with line items and optional PDF attachment."""
+
+    name = "create_quote"
+    description = (
+        "Create a new quote (offerte) in e-Boekhouden via POST /v1/api/offerte, insert line items "
+        "via POST /v1/api/offerteregel, and optionally attach a branded PDF from the Digital Archive."
+    )
+    input_schema = CreateQuoteInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        quote = await web_client.async_create_quote(
+            relation_id=int(arguments["relation_id"]),
+            items=arguments.get("items"),
+            quote_number=arguments.get("quote_number"),
+            date=arguments.get("date"),
+            expiration_date=arguments.get("expiration_date"),
+            expiration_days=int(arguments.get("expiration_days", 30)),
+            status_id=arguments.get("status_id"),
+            status=arguments.get("status"),
+            template_id=arguments.get("template_id"),
+            assigned_user_id=arguments.get("assigned_user_id"),
+            in_ex_vat=str(arguments.get("in_ex_vat", "EX")),
+            reference=str(arguments.get("reference") or ""),
+            public_note=str(arguments.get("public_note") or ""),
+            internal_note=str(arguments.get("internal_note") or ""),
+            archive_file_id=arguments.get("archive_file_id"),
+        )
+        return {
+            "success": True,
+            "quote": quote,
+        }
+
+
+class UpdateQuoteInput(ToolSchema):
+    """Input schema for update_quote."""
+
+    quote_id: int = Field(ge=1, description="Internal quote (offerte) ID to update")
+    relation_id: int | None = Field(
+        default=None, ge=1, description="Updated customer relation ID"
+    )
+    quote_number: str | None = Field(
+        default=None, max_length=50, description="Updated quote number"
+    )
+    date: str | None = Field(
+        default=None, description="Updated quote date (YYYY-MM-DD)"
+    )
+    expiration_date: str | None = Field(
+        default=None, description="Updated expiration date (YYYY-MM-DD)"
+    )
+    status_id: int | None = Field(
+        default=None, ge=1, description="Updated quote status ID"
+    )
+    status: str | None = Field(
+        default=None,
+        description=(
+            "Updated status name/substring (e.g. 'Ingevoerd', 'Verzonden', 'Wacht op antwoord', "
+            "'Geaccepteerd', 'Gefactureerd')"
+        ),
+    )
+    template_id: int | None = Field(
+        default=None, ge=1, description="Updated quote template ID"
+    )
+    assigned_user_id: int | None = Field(
+        default=None, ge=1, description="Updated assigned user ID"
+    )
+    in_ex_vat: Literal["EX", "IN"] | None = Field(
+        default=None, description="'EX' for VAT exclusive or 'IN' for VAT inclusive"
+    )
+    reference: str | None = Field(
+        default=None, max_length=50, description="Updated customer reference (kenmerk)"
+    )
+    public_note: str | None = Field(
+        default=None,
+        max_length=15000,
+        description="Updated customer-facing note (notitiePubliek)",
+    )
+    internal_note: str | None = Field(
+        default=None,
+        max_length=15000,
+        description="Updated internal note (notitieIntern)",
+    )
+    items: list[QuoteItemInput] | None = Field(
+        default=None,
+        max_length=500,
+        description="Optional quote line items to replace (or append to) existing line items",
+    )
+    replace_items: bool = Field(
+        default=True,
+        description="If true (default) and items is provided, replaces existing line items; if false, appends items",
+    )
+    archive_file_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional Digital Archive file ID to link to this quote",
+    )
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for updating a quote",
+    )
+
+
+class UpdateQuoteTool(BaseTool):
+    """Update an existing quote (offerte), its status, line items, or linked archive PDF."""
+
+    name = "update_quote"
+    description = (
+        "Update an existing quote (offerte) in e-Boekhouden via PUT /v1/api/offerte (e.g. update "
+        "status to '02. Verzonden' or '04. Geaccepteerd', update notes/dates, replace or append "
+        "line items, or attach a Digital Archive PDF)."
+    )
+    input_schema = UpdateQuoteInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        quote = await web_client.async_update_quote(
+            quote_id=int(arguments["quote_id"]),
+            relation_id=arguments.get("relation_id"),
+            quote_number=arguments.get("quote_number"),
+            date=arguments.get("date"),
+            expiration_date=arguments.get("expiration_date"),
+            status_id=arguments.get("status_id"),
+            status=arguments.get("status"),
+            template_id=arguments.get("template_id"),
+            assigned_user_id=arguments.get("assigned_user_id"),
+            in_ex_vat=arguments.get("in_ex_vat"),
+            reference=arguments.get("reference"),
+            public_note=arguments.get("public_note"),
+            internal_note=arguments.get("internal_note"),
+            items=arguments.get("items"),
+            replace_items=bool(arguments.get("replace_items", True)),
+            archive_file_id=arguments.get("archive_file_id"),
+        )
+        return {
+            "success": True,
+            "quote": quote,
+        }
+
+
+class AttachFileToQuoteInput(ToolSchema):
+    """Input schema for attach_file_to_quote."""
+
+    quote_id: int = Field(ge=1, description="Internal quote (offerte) ID")
+    file_id: int = Field(
+        ge=1, description="Digital Archive file ID (folder/file ID) to link"
+    )
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for linking a file to a quote",
+    )
+
+
+class AttachFileToQuoteTool(BaseTool):
+    """Attach an uploaded Digital Archive file (e.g. branded PDF offer) to a quote (offerte)."""
+
+    name = "attach_file_to_quote"
+    description = (
+        "Attach a Digital Archive file (such as an uploaded branded PDF offer) to an existing "
+        "quote (offerte) via POST /v1/api/folderkoppel/koppel/item (koppelType='OF')."
+    )
+    input_schema = AttachFileToQuoteInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        quote_id = int(arguments["quote_id"])
+        file_id = int(arguments["file_id"])
+        result = await web_client.async_link_file_to_quote(
+            quote_id=quote_id, file_id=file_id
+        )
+        return {
+            "success": True,
+            "quote_id": quote_id,
+            "file_id": file_id,
+            "response": result,
+        }
+
+
+class DeleteQuoteInput(ToolSchema):
+    """Input schema for delete_quote."""
+
+    quote_id: int = Field(ge=1, description="Internal quote (offerte) ID to delete")
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for deleting a quote",
+    )
+
+
+class DeleteQuoteTool(BaseTool):
+    """Delete a quote (offerte) by ID via the web session API."""
+
+    name = "delete_quote"
+    description = (
+        "Delete a quote (offerte) by ID via DELETE /v1/api/offerte/{quote_id}."
+    )
+    input_schema = DeleteQuoteInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        quote_id = int(arguments["quote_id"])
+        result = await web_client.async_delete_quote(quote_id=quote_id)
+        return {
+            "success": True,
+            **result,
         }

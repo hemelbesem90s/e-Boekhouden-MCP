@@ -1,6 +1,6 @@
 # Tool catalog
 
-The server registers 64 tools across four architectural layers. The default surface contains 43 read-only tools (34 core REST v1 tools, 3 AI Bookkeeping Inbox tools, and 6 web session inspection tools). Enabling writes exposes 21 write tools (14 accounting write tools, 1 archive tool, and 6 web session write tools), gated behind explicit confirmation and native OS biometrics.
+The server registers 75 tools across four architectural layers. The default surface contains 50 read-only tools (36 core REST v1 tools, 3 AI Bookkeeping Inbox tools, and 11 web session inspection tools). Enabling writes exposes 25 write tools (14 accounting write tools, 1 archive tool, and 10 web session write tools), gated behind explicit confirmation and native OS biometrics.
 
 ## Search and batch detail
 
@@ -64,6 +64,15 @@ The server registers 64 tools across four architectural layers. The default surf
 | `move_archive_files` | Move Digital Archive files into a target folder. | Opt-in Write |
 | `create_archive_folder` | Create a new folder in the Digital Archive. | Opt-in Write |
 | `delete_web_mutations` | Resolve mutation numbers (`nr`) to internal grid IDs and delete them. | Opt-in Write |
+| `list_time_entries` | List logged hours (uninvoiced WIP, invoiced, or all) with per-project financial summary. | Read-only |
+| `list_time_projects` | List time-tracking projects and their linked client relations. | Read-only |
+| `list_time_activities` | List time-tracking activities, hourly/kilometer rates, VAT codes, and revenue ledgers. | Read-only |
+| `list_quotes` | List quotes (*offertes*) with optional filters and available statuses/templates/next number. | Read-only |
+| `get_quote` | Get full details of a quote by ID or quote number, including line items and attached files. | Read-only |
+| `create_quote` | Create a commercial quote (*offerte*), insert line items, and optionally attach a PDF from the Digital Archive. | Opt-in Write |
+| `update_quote` | Update an existing quote's status, metadata, line items, or attached Digital Archive PDF. | Opt-in Write |
+| `attach_file_to_quote` | Attach a Digital Archive file (such as a branded PDF offer) to a quote (`koppelType='OF'`). | Opt-in Write |
+| `delete_quote` | Delete a quote by ID via `DELETE /v1/api/offerte/{quote_id}`. | Opt-in Write |
 
 ## Result behavior
 

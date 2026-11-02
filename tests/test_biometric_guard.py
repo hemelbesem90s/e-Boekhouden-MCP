@@ -72,6 +72,30 @@ def test_format_write_prompt_invoice_fallback_relation():
     assert prompt == "e-Boekhouden MCP: Approve POST Invoice to Relation [Relation]?"
 
 
+def test_format_write_prompt_quote():
+    prompt = format_write_prompt(
+        "create_quote",
+        {
+            "relation_id": 70666369,
+            "items": [
+                {
+                    "description": "Engineering",
+                    "quantity": 10.0,
+                    "price_per_unit": 125.0,
+                }
+            ],
+        },
+    )
+    assert (
+        prompt
+        == "e-Boekhouden MCP: Approve POST Quote for EUR 1,250.00 (Relation 70666369)?"
+    )
+    prompt_update = format_write_prompt("update_quote", {"quote_id": 2490022})
+    assert prompt_update == "e-Boekhouden MCP: Approve PUT Quote (Quote ID 2490022)?"
+    prompt_del = format_write_prompt("delete_quote", {"quote_id": 2490022})
+    assert prompt_del == "e-Boekhouden MCP: Approve DELETE delete_quote for ID 2490022?"
+
+
 def test_format_write_prompt_mutation_with_explicit_amount():
     prompt = format_write_prompt(
         "create_mutation",

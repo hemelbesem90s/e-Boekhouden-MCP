@@ -74,6 +74,29 @@ def format_write_prompt(tool_name: str, arguments: dict[str, Any]) -> str:
             return f"e-Boekhouden MCP: Approve POST Invoice for EUR {_format_currency(amount_val)} to Relation {relation_id}?"
         return f"e-Boekhouden MCP: Approve POST Invoice to Relation {relation_id}?"
 
+    # Quotes (Offertes)
+    if tool_name in ("create_quote", "update_quote"):
+        action = "POST" if tool_name == "create_quote" else "PUT"
+        target = (
+            f"Relation {args.get('relation_id', '[Relation]')}"
+            if tool_name == "create_quote"
+            else f"Quote ID {args.get('quote_id', '[Quote]')}"
+        )
+        amount_val = None
+        if "items" in args and isinstance(args["items"], list):
+            try:
+                amount_val = sum(
+                    float(item.get("price_per_unit", 0.0) or 0.0)
+                    * float(item.get("quantity", 1.0) or 1.0)
+                    for item in args["items"]
+                    if isinstance(item, dict)
+                )
+            except (ValueError, TypeError):
+                amount_val = None
+        if amount_val is not None:
+            return f"e-Boekhouden MCP: Approve {action} Quote for EUR {_format_currency(amount_val)} ({target})?"
+        return f"e-Boekhouden MCP: Approve {action} Quote ({target})?"
+
     # Mutations (Journal entries)
     if tool_name == "create_mutation" or (
         "mutation" in tool_name and "create" in tool_name
@@ -113,12 +136,15 @@ def format_write_prompt(tool_name: str, arguments: dict[str, Any]) -> str:
         entity_id = args.get(
             "id",
             args.get(
-                "relation_id",
+                "quote_id",
                 args.get(
-                    "product_id",
+                    "relation_id",
                     args.get(
-                        "cost_center_id",
-                        args.get("member_id", args.get("ledger_id", "Unknown")),
+                        "product_id",
+                        args.get(
+                            "cost_center_id",
+                            args.get("member_id", args.get("ledger_id", "Unknown")),
+                        ),
                     ),
                 ),
             ),

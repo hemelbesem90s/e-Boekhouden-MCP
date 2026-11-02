@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import datetime as dt
 import secrets
 from pathlib import Path
 from typing import Any
@@ -291,6 +292,216 @@ def build_afschrift_params(
     }
 
 
+def parse_eb_date_dict(
+    date_val: str | dict[str, Any] | dt.date | None,
+    *,
+    base_date: dict[str, int] | None = None,
+    default_offset_days: int = 0,
+) -> dict[str, int]:
+    """Convert a date string (YYYY-MM-DD or DD-MM-YYYY), date, or dict to e-Boekhouden's {year, month, day} dict."""
+    if isinstance(date_val, dict) and all(
+        k in date_val for k in ("year", "month", "day")
+    ):
+        return {
+            "year": int(date_val["year"]),
+            "month": int(date_val["month"]),
+            "day": int(date_val["day"]),
+        }
+    if isinstance(date_val, (dt.date, dt.datetime)):
+        return {
+            "year": int(date_val.year),
+            "month": int(date_val.month),
+            "day": int(date_val.day),
+        }
+    if isinstance(date_val, str) and date_val.strip():
+        raw = date_val.strip()[:10]
+        parts = raw.split("-")
+        if len(parts) == 3:
+            if len(parts[0]) == 4:
+                return {
+                    "year": int(parts[0]),
+                    "month": int(parts[1]),
+                    "day": int(parts[2]),
+                }
+            return {
+                "year": int(parts[2]),
+                "month": int(parts[1]),
+                "day": int(parts[0]),
+            }
+        raise ValueError(
+            f"Invalid date format '{date_val}'. Expected YYYY-MM-DD or DD-MM-YYYY."
+        )
+
+    if base_date:
+        anchor = dt.date(
+            int(base_date["year"]), int(base_date["month"]), int(base_date["day"])
+        )
+    else:
+        anchor = dt.date.today()
+    target = anchor + dt.timedelta(days=default_offset_days)
+    return {
+        "year": int(target.year),
+        "month": int(target.month),
+        "day": int(target.day),
+    }
+
+
+def format_eb_date_dict(date_val: Any) -> str | None:
+    """Format an e-Boekhouden {year, month, day} dict or ISO string to YYYY-MM-DD."""
+    if isinstance(date_val, dict) and all(
+        k in date_val for k in ("year", "month", "day")
+    ):
+        return f"{int(date_val['year']):04d}-{int(date_val['month']):02d}-{int(date_val['day']):02d}"
+    if isinstance(date_val, str) and date_val.strip():
+        return date_val.strip()[:10]
+    return None
+
+
+def resolve_quote_status_id(
+    statuses: list[dict[str, Any]],
+    status_id: int | None = None,
+    status: str | None = None,
+) -> int:
+    """Resolve an e-Boekhouden offertestatus ID by integer ID, name/substring, or default to first status."""
+    if status_id is not None:
+        return int(status_id)
+    if status and status.strip():
+        needle = status.strip().lower()
+        for s in statuses:
+            label = str(s.get("status") or "").lower()
+            if needle == label or needle in label:
+                return int(s["id"])
+        raise ValueError(
+            f"Unknown quote status '{status}'. Available statuses: "
+            f"{[s.get('status') for s in statuses]}"
+        )
+    if statuses and statuses[0].get("id") is not None:
+        return int(statuses[0]["id"])
+    raise WebSessionError("No quote statuses (offertestatus) found in e-Boekhouden.")
+
+
+def resolve_revenue_ledger_id(
+    ledgers: list[dict[str, Any]],
+    ledger_id: int | None = None,
+    vat_code: str = "HOOG_VERK_21",
+) -> int:
+    """Resolve a revenue ledger ID by internal ID, ledger code (e.g. 810200), or VAT code."""
+    if ledger_id is not None:
+        lid = int(ledger_id)
+        for gbr in ledgers:
+            if int(gbr.get("id") or 0) == lid:
+                return lid
+            code_str = str(gbr.get("code") or "").strip().lstrip("0")
+            if code_str and code_str == str(lid).lstrip("0"):
+                return int(gbr["id"])
+        return lid
+
+    vc = (vat_code or "HOOG_VERK_21").upper()
+    preferred_codes: tuple[str, ...]
+    if "BI_EU" in vc:
+        preferred_codes = ("810300", "8000", "810200")
+    elif "BU_EU" in vc:
+        preferred_codes = ("810400", "8000", "810200")
+    elif "LAAG" in vc or "9" in vc:
+        preferred_codes = ("810100", "8000", "810200")
+    elif "VERL" in vc:
+        preferred_codes = ("810700", "8000", "810200")
+    elif "VRIJ" in vc:
+        preferred_codes = ("810600", "8000", "810200")
+    elif "GEEN" in vc or "NUL" in vc:
+        preferred_codes = ("810500", "8000", "810200")
+    else:
+        preferred_codes = ("810200", "8000", "801000")
+
+    for target_code in preferred_codes:
+        for gbr in ledgers:
+            code_str = str(gbr.get("code") or "").strip()
+            if code_str == target_code or code_str.lstrip("0") == target_code.lstrip(
+                "0"
+            ):
+                return int(gbr["id"])
+
+    for gbr in ledgers:
+        if str(gbr.get("code") or "").strip().startswith("8"):
+            return int(gbr["id"])
+    if ledgers and ledgers[0].get("id") is not None:
+        return int(ledgers[0]["id"])
+    raise WebSessionError("Could not resolve a default revenue ledger (grootboekId).")
+
+
+def build_quote_line_payload(
+    item: dict[str, Any],
+    *,
+    quote_id: int,
+    in_ex_vat: str = "EX",
+    volgorde: int = 1,
+    ledgers: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Construct an e-Boekhouden offerteregel payload with automatic VAT price calculation."""
+    vat_code = str(item.get("vat_code") or item.get("btwCode") or "HOOG_VERK_21")
+    vat_rate = _vat_rate_for_code(vat_code)
+    raw_qty = (
+        item["quantity"]
+        if item.get("quantity") is not None
+        else (item["aantal"] if item.get("aantal") is not None else 1.0)
+    )
+    quantity = float(raw_qty)
+    raw_unit_price = (
+        item["price_per_unit"]
+        if item.get("price_per_unit") is not None
+        else (item["prijsExcl"] if item.get("prijsExcl") is not None else 0.0)
+    )
+    raw_price = float(raw_unit_price)
+    is_incl = str(in_ex_vat or "EX").upper() == "IN"
+    if is_incl:
+        prijs_incl = round(raw_price, 2)
+        prijs_excl = round(raw_price / (1.0 + vat_rate), 2) if vat_rate else prijs_incl
+    else:
+        prijs_excl = round(raw_price, 2)
+        prijs_incl = round(raw_price * (1.0 + vat_rate), 2)
+
+    raw_ledger = item.get("ledger_id") or item.get("grootboekId")
+    ledger_id = resolve_revenue_ledger_id(
+        ledgers or [],
+        ledger_id=int(raw_ledger) if raw_ledger is not None else None,
+        vat_code=vat_code,
+    )
+
+    payload: dict[str, Any] = {
+        "id": int(item.get("id") or 0),
+        "offerteId": int(quote_id),
+        "aantal": quantity,
+        "volgorde": int(item.get("volgorde") or volgorde),
+        "omschrijving": str(item.get("description") or item.get("omschrijving") or ""),
+        "prijsExcl": prijs_excl,
+        "prijsIncl": prijs_incl,
+        "btwCode": vat_code,
+        "grootboekId": ledger_id,
+        "kortingIsPerc": bool(
+            item.get("discount_is_percentage", item.get("kortingIsPerc", True))
+        ),
+    }
+    raw_unit_id = item.get("unit_id") or item.get("eenheidId")
+    if raw_unit_id is not None:
+        payload["eenheidId"] = int(raw_unit_id)
+    if item.get("code"):
+        payload["code"] = str(item["code"])[:20]
+    raw_product_id = item.get("product_id") or item.get("artikelId")
+    if raw_product_id is not None:
+        payload["artikelId"] = int(raw_product_id)
+    raw_cc_id = item.get("cost_center_id") or item.get("kostenplaatsId")
+    if raw_cc_id is not None:
+        payload["kostenplaatsId"] = int(raw_cc_id)
+    discount = (
+        item.get("discount")
+        if item.get("discount") is not None
+        else item.get("korting")
+    )
+    if discount is not None and float(discount) != 0.0:
+        payload["korting"] = float(discount)
+    return payload
+
+
 class WebSessionClient:
     """Client for e-Boekhouden web session API (secure20 / secure)."""
 
@@ -346,7 +557,7 @@ class WebSessionClient:
                 "e-Boekhouden session expired (SECURITY_010 / Niet ingelogd)"
             )
 
-        if response.status_code not in (200, 201):
+        if response.status_code not in (200, 201, 204):
             raise WebSessionError(
                 f"Web session API returned HTTP {response.status_code}: {body[:200]}"
             )
@@ -726,6 +937,557 @@ class WebSessionClient:
                 "fetchedCount": len(all_rows),
                 "summary": summary,
                 "rows": all_rows,
+            }
+        finally:
+            if self._http is None:
+                client.close()
+
+    def _build_quotes_query(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        quote_number: str | None = None,
+        relation_id: int | None = None,
+        status_id: int | None = None,
+        assigned_user_id: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        expiration_from: str | None = None,
+        expiration_to: str | None = None,
+    ) -> str:
+        params: dict[str, str] = {
+            "offset": str(offset),
+            "limit": str(min(limit, 500)),
+            "orderBy": "",
+            "sortDirection": "1",
+        }
+        if quote_number:
+            params["nummer"] = str(quote_number)
+        if relation_id is not None:
+            params["relatieId"] = str(relation_id)
+        if status_id is not None:
+            params["statusId"] = str(status_id)
+        if assigned_user_id is not None:
+            params["behandelGebruikerId"] = str(assigned_user_id)
+        if date_from:
+            params["datumVan"] = str(date_from)
+        if date_to:
+            params["datumTot"] = str(date_to)
+        if expiration_from:
+            params["vervaldatumVan"] = str(expiration_from)
+        if expiration_to:
+            params["vervaldatumTot"] = str(expiration_to)
+        return f"{self.base_url}/v1/api/offerte/gridtable?{urlencode(params)}"
+
+    def get_quote_metadata(self) -> dict[str, Any]:
+        """Fetch quote statuses, templates, users, and next quote number."""
+        client = self._get_sync_client()
+        try:
+            hdrs = self._get_headers()
+            statuses = self._check_response(
+                client.get(f"{self.base_url}/v1/api/offertestatus", headers=hdrs)
+            )
+            templates = self._check_response(
+                client.get(
+                    f"{self.base_url}/v1/api/offertesjabloon/selectlist", headers=hdrs
+                )
+            )
+            users = self._check_response(
+                client.get(f"{self.base_url}/v1/api/user/selectlist", headers=hdrs)
+            )
+            next_nr = self._check_response(
+                client.get(f"{self.base_url}/v1/api/offerte/nummer/next", headers=hdrs)
+            )
+            return {
+                "statuses": statuses if isinstance(statuses, list) else [],
+                "templates": templates if isinstance(templates, list) else [],
+                "users": users if isinstance(users, list) else [],
+                "next_quote_number": str(next_nr) if next_nr is not None else "",
+            }
+        finally:
+            if self._http is None:
+                client.close()
+
+    def list_quotes(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        quote_number: str | None = None,
+        relation_id: int | None = None,
+        status_id: int | None = None,
+        assigned_user_id: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        expiration_from: str | None = None,
+        expiration_to: str | None = None,
+        include_metadata: bool = True,
+    ) -> dict[str, Any]:
+        """List quotes (offertes) from /v1/api/offerte/gridtable with optional filters and metadata."""
+        url = self._build_quotes_query(
+            offset=offset,
+            limit=limit,
+            quote_number=quote_number,
+            relation_id=relation_id,
+            status_id=status_id,
+            assigned_user_id=assigned_user_id,
+            date_from=date_from,
+            date_to=date_to,
+            expiration_from=expiration_from,
+            expiration_to=expiration_to,
+        )
+        client = self._get_sync_client()
+        try:
+            resp = client.get(url, headers=self._get_headers())
+            raw = self._check_response(resp)
+            rows = parse_gridtable_rows(raw)
+            total_excl = round(sum(float(r.get("totaalExcl") or 0.0) for r in rows), 2)
+            total_vat = round(sum(float(r.get("totaalbtw") or 0.0) for r in rows), 2)
+            total_incl = round(sum(float(r.get("totaalIncl") or 0.0) for r in rows), 2)
+            result: dict[str, Any] = {
+                "rowCount": int(raw.get("rowCount", len(rows))),
+                "fetchedCount": len(rows),
+                "summary": {
+                    "total_excl_vat": total_excl,
+                    "total_vat": total_vat,
+                    "total_incl_vat": total_incl,
+                },
+                "quotes": rows,
+            }
+            if include_metadata:
+                result["metadata"] = self.get_quote_metadata()
+            return result
+        finally:
+            if self._http is None:
+                client.close()
+
+    def get_quote(
+        self,
+        quote_id: int | None = None,
+        quote_number: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch full details of a quote by ID or quote_number, including line items and attached files."""
+        resolved_id = quote_id
+        if resolved_id is None:
+            if not quote_number:
+                raise ValueError("Either quote_id or quote_number must be provided.")
+            listing = self.list_quotes(
+                quote_number=quote_number, include_metadata=False
+            )
+            for q in listing.get("quotes", []):
+                if (
+                    str(q.get("nummer") or "").strip().lower()
+                    == quote_number.strip().lower()
+                ):
+                    resolved_id = int(q["id"])
+                    break
+            if resolved_id is None and listing.get("quotes"):
+                resolved_id = int(listing["quotes"][0]["id"])
+            if resolved_id is None:
+                raise WebSessionError(
+                    f"No quote found matching quote_number='{quote_number}'"
+                )
+
+        qid = int(resolved_id)
+        client = self._get_sync_client()
+        try:
+            hdrs = self._get_headers()
+            model = self._check_response(
+                client.get(f"{self.base_url}/v1/api/offerte/{qid}", headers=hdrs)
+            )
+            dashboard = self._check_response(
+                client.get(
+                    f"{self.base_url}/v1/api/offerte/dashboard/{qid}", headers=hdrs
+                )
+            )
+            in_ex = str((model or {}).get("inEx") or "EX").upper()
+            is_incl_str = "true" if in_ex == "IN" else "false"
+            regels_raw = self._check_response(
+                client.get(
+                    f"{self.base_url}/v1/api/offerteregel/gridtable/{qid}"
+                    f"?isInclBtw={is_incl_str}&addArtikelVoorraad=false",
+                    headers=hdrs,
+                )
+            )
+            files_raw = self._check_response(
+                client.get(
+                    f"{self.base_url}/v1/api/folder/gekoppeldgridtable"
+                    f"?offset=0&limit=50&orderBy=&sortDirection=1&koppelId={qid}&koppelSoort=OF",
+                    headers=hdrs,
+                )
+            )
+            items = parse_gridtable_rows(regels_raw)
+            attached_files = parse_gridtable_rows(files_raw)
+            return {
+                "id": qid,
+                "quote_number": model.get("nummer") or dashboard.get("nummer"),
+                "status": dashboard.get("status"),
+                "status_id": model.get("statusId"),
+                "relation_id": model.get("relatieId") or dashboard.get("relatieId"),
+                "relation_code": dashboard.get("relatieCode"),
+                "relation_name": dashboard.get("relatieBedrijf"),
+                "date": format_eb_date_dict(model.get("datum"))
+                or format_eb_date_dict(dashboard.get("datum")),
+                "expiration_date": format_eb_date_dict(model.get("vervaldatum"))
+                or format_eb_date_dict(dashboard.get("vervalDatum")),
+                "reference": model.get("kenmerk")
+                or dashboard.get("kenmerkKlant")
+                or "",
+                "in_ex_vat": in_ex,
+                "template_id": model.get("sjabloonId"),
+                "assigned_user_id": model.get("behandelGebruikerId"),
+                "assigned_user": dashboard.get("inBehandelingBij"),
+                "public_note": model.get("notitiePubliek") or "",
+                "internal_note": model.get("notitieIntern") or "",
+                "total_excl_vat": float(model.get("totaalExcl") or 0.0),
+                "total_vat": float(model.get("totaalBtw") or 0.0),
+                "total_incl_vat": float(model.get("totaalIncl") or 0.0),
+                "items": items,
+                "attached_files": attached_files,
+                "model": model,
+                "dashboard": dashboard,
+            }
+        finally:
+            if self._http is None:
+                client.close()
+
+    def link_file_to_quote(self, quote_id: int, file_id: int) -> dict[str, Any]:
+        """Attach a Digital Archive file to a quote via POST /v1/api/folderkoppel/koppel/item (koppelType='OF')."""
+        url = f"{self.base_url}/v1/api/folderkoppel/koppel/item"
+        payload = {
+            "koppelId": int(quote_id),
+            "folders": [{"id": int(file_id), "soort": "F"}],
+            "koppelType": "OF",
+        }
+        client = self._get_sync_client()
+        try:
+            resp = client.post(url, json=payload, headers=self._get_headers())
+            return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def create_quote(
+        self,
+        *,
+        relation_id: int,
+        items: list[dict[str, Any]] | None = None,
+        quote_number: str | None = None,
+        date: str | None = None,
+        expiration_date: str | None = None,
+        expiration_days: int = 30,
+        status_id: int | None = None,
+        status: str | None = None,
+        template_id: int | None = None,
+        assigned_user_id: int | None = None,
+        in_ex_vat: str = "EX",
+        reference: str = "",
+        public_note: str = "",
+        internal_note: str = "",
+        invoice_email_template_id: int | str | None = None,
+        archive_file_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Create a quote (offerte), insert line items, optionally attach an archive PDF, and return full quote."""
+        meta = self.get_quote_metadata()
+        resolved_status_id = resolve_quote_status_id(
+            meta["statuses"], status_id=status_id, status=status
+        )
+        resolved_number = (
+            quote_number.strip()
+            if quote_number and quote_number.strip()
+            else meta["next_quote_number"]
+        )
+        if not resolved_number:
+            raise WebSessionError(
+                "Could not determine quote_number (/v1/api/offerte/nummer/next returned empty)."
+            )
+
+        resolved_template_id = template_id
+        if resolved_template_id is None:
+            active_templates = [
+                t for t in meta["templates"] if not t.get("inactief")
+            ] or meta["templates"]
+            if active_templates and active_templates[0].get("id") is not None:
+                resolved_template_id = int(active_templates[0]["id"])
+        if resolved_template_id is None:
+            raise WebSessionError(
+                "No quote template (offertesjabloon) found in e-Boekhouden."
+            )
+
+        resolved_user_id = assigned_user_id
+        if resolved_user_id is None and meta["users"]:
+            resolved_user_id = int(meta["users"][0]["id"])
+
+        datum_dict = parse_eb_date_dict(date, default_offset_days=0)
+        verval_dict = parse_eb_date_dict(
+            expiration_date, base_date=datum_dict, default_offset_days=expiration_days
+        )
+        norm_in_ex = "IN" if str(in_ex_vat or "EX").upper() == "IN" else "EX"
+
+        header_payload: dict[str, Any] = {
+            "statusId": int(resolved_status_id),
+            "nummer": str(resolved_number),
+            "behandelGebruikerId": resolved_user_id,
+            "relatieId": int(relation_id),
+            "kenmerk": str(reference or "")[:50],
+            "datum": datum_dict,
+            "vervaldatum": verval_dict,
+            "sjabloonId": int(resolved_template_id),
+            "factuurEmailsjabloonId": (
+                invoice_email_template_id
+                if invoice_email_template_id is not None
+                else ""
+            ),
+            "notitiePubliek": str(public_note or ""),
+            "notitieIntern": str(internal_note or ""),
+            "inEx": norm_in_ex,
+        }
+
+        client = self._get_sync_client()
+        try:
+            hdrs = self._get_headers()
+            create_resp = self._check_response(
+                client.post(
+                    f"{self.base_url}/v1/api/offerte",
+                    json=header_payload,
+                    headers=hdrs,
+                )
+            )
+            created_id = int(
+                create_resp["id"]
+                if isinstance(create_resp, dict) and "id" in create_resp
+                else create_resp
+            )
+
+            if items:
+                need_ledgers = any(
+                    not (it.get("ledger_id") or it.get("grootboekId"))
+                    or int(it.get("ledger_id") or it.get("grootboekId") or 0)
+                    < 1_000_000
+                    for it in items
+                )
+                ledgers: list[dict[str, Any]] = []
+                if need_ledgers:
+                    gbr_resp = self._check_response(
+                        client.get(
+                            f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL",
+                            headers=hdrs,
+                        )
+                    )
+                    if isinstance(gbr_resp, list):
+                        ledgers = gbr_resp
+
+                for idx, item_data in enumerate(items, start=1):
+                    line_payload = build_quote_line_payload(
+                        item_data,
+                        quote_id=created_id,
+                        in_ex_vat=norm_in_ex,
+                        volgorde=idx,
+                        ledgers=ledgers,
+                    )
+                    self._check_response(
+                        client.post(
+                            f"{self.base_url}/v1/api/offerteregel",
+                            json=line_payload,
+                            headers=hdrs,
+                        )
+                    )
+
+            if archive_file_id is not None:
+                self.link_file_to_quote(
+                    quote_id=created_id, file_id=int(archive_file_id)
+                )
+
+            return self.get_quote(quote_id=created_id)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def update_quote(
+        self,
+        *,
+        quote_id: int,
+        relation_id: int | None = None,
+        quote_number: str | None = None,
+        date: str | None = None,
+        expiration_date: str | None = None,
+        status_id: int | None = None,
+        status: str | None = None,
+        template_id: int | None = None,
+        assigned_user_id: int | None = None,
+        in_ex_vat: str | None = None,
+        reference: str | None = None,
+        public_note: str | None = None,
+        internal_note: str | None = None,
+        items: list[dict[str, Any]] | None = None,
+        replace_items: bool = True,
+        archive_file_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing quote header, optionally replace/append line items or attach an archive file."""
+        qid = int(quote_id)
+        client = self._get_sync_client()
+        try:
+            hdrs = self._get_headers()
+            existing = self._check_response(
+                client.get(f"{self.base_url}/v1/api/offerte/{qid}", headers=hdrs)
+            )
+            if not isinstance(existing, dict):
+                raise WebSessionError(f"Quote {qid} not found.")
+
+            resolved_status_id = existing.get("statusId")
+            if status_id is not None or status is not None:
+                statuses = self._check_response(
+                    client.get(f"{self.base_url}/v1/api/offertestatus", headers=hdrs)
+                )
+                resolved_status_id = resolve_quote_status_id(
+                    statuses if isinstance(statuses, list) else [],
+                    status_id=status_id,
+                    status=status,
+                )
+
+            datum_dict = (
+                parse_eb_date_dict(date) if date is not None else existing.get("datum")
+            )
+            verval_dict = (
+                parse_eb_date_dict(expiration_date)
+                if expiration_date is not None
+                else existing.get("vervaldatum")
+            )
+            norm_in_ex = (
+                ("IN" if str(in_ex_vat).upper() == "IN" else "EX")
+                if in_ex_vat is not None
+                else str(existing.get("inEx") or "EX")
+            )
+
+            update_payload: dict[str, Any] = {
+                "id": qid,
+                "statusId": int(resolved_status_id or 0),
+                "nummer": (
+                    str(quote_number)
+                    if quote_number is not None
+                    else existing.get("nummer")
+                ),
+                "behandelGebruikerId": (
+                    int(assigned_user_id)
+                    if assigned_user_id is not None
+                    else existing.get("behandelGebruikerId")
+                ),
+                "relatieId": (
+                    int(relation_id)
+                    if relation_id is not None
+                    else existing.get("relatieId")
+                ),
+                "kenmerk": (
+                    str(reference)[:50]
+                    if reference is not None
+                    else (existing.get("kenmerk") or "")
+                ),
+                "datum": datum_dict,
+                "vervaldatum": verval_dict,
+                "sjabloonId": (
+                    int(template_id)
+                    if template_id is not None
+                    else existing.get("sjabloonId")
+                ),
+                "factuurEmailsjabloonId": existing.get("factuurEmailsjabloonId", ""),
+                "notitiePubliek": (
+                    str(public_note)
+                    if public_note is not None
+                    else (existing.get("notitiePubliek") or "")
+                ),
+                "notitieIntern": (
+                    str(internal_note)
+                    if internal_note is not None
+                    else (existing.get("notitieIntern") or "")
+                ),
+                "inEx": norm_in_ex,
+            }
+
+            self._check_response(
+                client.put(
+                    f"{self.base_url}/v1/api/offerte",
+                    json=update_payload,
+                    headers=hdrs,
+                )
+            )
+
+            if items is not None:
+                is_incl_str = "true" if norm_in_ex == "IN" else "false"
+                regels_raw = self._check_response(
+                    client.get(
+                        f"{self.base_url}/v1/api/offerteregel/gridtable/{qid}"
+                        f"?isInclBtw={is_incl_str}&addArtikelVoorraad=false",
+                        headers=hdrs,
+                    )
+                )
+                existing_rows = parse_gridtable_rows(regels_raw)
+                start_volgorde = len(existing_rows) + 1
+                if replace_items and existing_rows:
+                    for row in existing_rows:
+                        if row.get("id") is not None:
+                            self._check_response(
+                                client.delete(
+                                    f"{self.base_url}/v1/api/offerteregel/{int(row['id'])}",
+                                    headers=hdrs,
+                                )
+                            )
+                    start_volgorde = 1
+
+                if items:
+                    need_ledgers = any(
+                        not (it.get("ledger_id") or it.get("grootboekId"))
+                        or int(it.get("ledger_id") or it.get("grootboekId") or 0)
+                        < 1_000_000
+                        for it in items
+                    )
+                    ledgers: list[dict[str, Any]] = []
+                    if need_ledgers:
+                        gbr_resp = self._check_response(
+                            client.get(
+                                f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL",
+                                headers=hdrs,
+                            )
+                        )
+                        if isinstance(gbr_resp, list):
+                            ledgers = gbr_resp
+
+                    for idx, item_data in enumerate(items, start=start_volgorde):
+                        line_payload = build_quote_line_payload(
+                            item_data,
+                            quote_id=qid,
+                            in_ex_vat=norm_in_ex,
+                            volgorde=idx,
+                            ledgers=ledgers,
+                        )
+                        self._check_response(
+                            client.post(
+                                f"{self.base_url}/v1/api/offerteregel",
+                                json=line_payload,
+                                headers=hdrs,
+                            )
+                        )
+
+            if archive_file_id is not None:
+                self.link_file_to_quote(quote_id=qid, file_id=int(archive_file_id))
+
+            return self.get_quote(quote_id=qid)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def delete_quote(self, quote_id: int) -> dict[str, Any]:
+        """Delete a quote by ID via DELETE /v1/api/offerte/{quote_id}."""
+        qid = int(quote_id)
+        url = f"{self.base_url}/v1/api/offerte/{qid}"
+        client = self._get_sync_client()
+        try:
+            resp = client.delete(url, headers=self._get_headers())
+            result = self._check_response(resp)
+            return {
+                "quote_id": qid,
+                "deleted": True,
+                "response": result,
             }
         finally:
             if self._http is None:
@@ -1152,3 +1914,588 @@ class WebSessionClient:
             "summary": summary,
             "rows": all_rows,
         }
+
+    async def async_get_quote_metadata(self) -> dict[str, Any]:
+        """Async version of get_quote_metadata."""
+
+        async def _fetch(
+            client_obj: httpx.AsyncClient, use_headers: bool
+        ) -> dict[str, Any]:
+            hdrs = self._get_headers() if use_headers else None
+            statuses = self._check_response(
+                await client_obj.get(
+                    f"{self.base_url}/v1/api/offertestatus", headers=hdrs
+                )
+            )
+            templates = self._check_response(
+                await client_obj.get(
+                    f"{self.base_url}/v1/api/offertesjabloon/selectlist", headers=hdrs
+                )
+            )
+            users = self._check_response(
+                await client_obj.get(
+                    f"{self.base_url}/v1/api/user/selectlist", headers=hdrs
+                )
+            )
+            next_nr = self._check_response(
+                await client_obj.get(
+                    f"{self.base_url}/v1/api/offerte/nummer/next", headers=hdrs
+                )
+            )
+            return {
+                "statuses": statuses if isinstance(statuses, list) else [],
+                "templates": templates if isinstance(templates, list) else [],
+                "users": users if isinstance(users, list) else [],
+                "next_quote_number": str(next_nr) if next_nr is not None else "",
+            }
+
+        if self._async_http is not None:
+            return await _fetch(self._async_http, use_headers=True)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            return await _fetch(client, use_headers=False)
+
+    async def async_list_quotes(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        quote_number: str | None = None,
+        relation_id: int | None = None,
+        status_id: int | None = None,
+        assigned_user_id: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        expiration_from: str | None = None,
+        expiration_to: str | None = None,
+        include_metadata: bool = True,
+    ) -> dict[str, Any]:
+        """Async version of list_quotes."""
+        url = self._build_quotes_query(
+            offset=offset,
+            limit=limit,
+            quote_number=quote_number,
+            relation_id=relation_id,
+            status_id=status_id,
+            assigned_user_id=assigned_user_id,
+            date_from=date_from,
+            date_to=date_to,
+            expiration_from=expiration_from,
+            expiration_to=expiration_to,
+        )
+        if self._async_http is not None:
+            resp = await self._async_http.get(url, headers=self._get_headers())
+            raw = self._check_response(resp)
+        else:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                headers=self._get_headers(),
+                timeout=self.timeout,
+            ) as client:
+                resp = await client.get(url)
+                raw = self._check_response(resp)
+
+        rows = parse_gridtable_rows(raw)
+        total_excl = round(sum(float(r.get("totaalExcl") or 0.0) for r in rows), 2)
+        total_vat = round(sum(float(r.get("totaalbtw") or 0.0) for r in rows), 2)
+        total_incl = round(sum(float(r.get("totaalIncl") or 0.0) for r in rows), 2)
+        result: dict[str, Any] = {
+            "rowCount": int(raw.get("rowCount", len(rows))),
+            "fetchedCount": len(rows),
+            "summary": {
+                "total_excl_vat": total_excl,
+                "total_vat": total_vat,
+                "total_incl_vat": total_incl,
+            },
+            "quotes": rows,
+        }
+        if include_metadata:
+            result["metadata"] = await self.async_get_quote_metadata()
+        return result
+
+    async def async_get_quote(
+        self,
+        quote_id: int | None = None,
+        quote_number: str | None = None,
+    ) -> dict[str, Any]:
+        """Async version of get_quote."""
+        resolved_id = quote_id
+        if resolved_id is None:
+            if not quote_number:
+                raise ValueError("Either quote_id or quote_number must be provided.")
+            listing = await self.async_list_quotes(
+                quote_number=quote_number, include_metadata=False
+            )
+            for q in listing.get("quotes", []):
+                if (
+                    str(q.get("nummer") or "").strip().lower()
+                    == quote_number.strip().lower()
+                ):
+                    resolved_id = int(q["id"])
+                    break
+            if resolved_id is None and listing.get("quotes"):
+                resolved_id = int(listing["quotes"][0]["id"])
+            if resolved_id is None:
+                raise WebSessionError(
+                    f"No quote found matching quote_number='{quote_number}'"
+                )
+
+        qid = int(resolved_id)
+
+        async def _fetch(
+            client_obj: httpx.AsyncClient, use_headers: bool
+        ) -> dict[str, Any]:
+            hdrs = self._get_headers() if use_headers else None
+            model = self._check_response(
+                await client_obj.get(
+                    f"{self.base_url}/v1/api/offerte/{qid}", headers=hdrs
+                )
+            )
+            dashboard = self._check_response(
+                await client_obj.get(
+                    f"{self.base_url}/v1/api/offerte/dashboard/{qid}", headers=hdrs
+                )
+            )
+            in_ex = str((model or {}).get("inEx") or "EX").upper()
+            is_incl_str = "true" if in_ex == "IN" else "false"
+            regels_raw = self._check_response(
+                await client_obj.get(
+                    f"{self.base_url}/v1/api/offerteregel/gridtable/{qid}"
+                    f"?isInclBtw={is_incl_str}&addArtikelVoorraad=false",
+                    headers=hdrs,
+                )
+            )
+            files_raw = self._check_response(
+                await client_obj.get(
+                    f"{self.base_url}/v1/api/folder/gekoppeldgridtable"
+                    f"?offset=0&limit=50&orderBy=&sortDirection=1&koppelId={qid}&koppelSoort=OF",
+                    headers=hdrs,
+                )
+            )
+            items = parse_gridtable_rows(regels_raw)
+            attached_files = parse_gridtable_rows(files_raw)
+            return {
+                "id": qid,
+                "quote_number": model.get("nummer") or dashboard.get("nummer"),
+                "status": dashboard.get("status"),
+                "status_id": model.get("statusId"),
+                "relation_id": model.get("relatieId") or dashboard.get("relatieId"),
+                "relation_code": dashboard.get("relatieCode"),
+                "relation_name": dashboard.get("relatieBedrijf"),
+                "date": format_eb_date_dict(model.get("datum"))
+                or format_eb_date_dict(dashboard.get("datum")),
+                "expiration_date": format_eb_date_dict(model.get("vervaldatum"))
+                or format_eb_date_dict(dashboard.get("vervalDatum")),
+                "reference": model.get("kenmerk")
+                or dashboard.get("kenmerkKlant")
+                or "",
+                "in_ex_vat": in_ex,
+                "template_id": model.get("sjabloonId"),
+                "assigned_user_id": model.get("behandelGebruikerId"),
+                "assigned_user": dashboard.get("inBehandelingBij"),
+                "public_note": model.get("notitiePubliek") or "",
+                "internal_note": model.get("notitieIntern") or "",
+                "total_excl_vat": float(model.get("totaalExcl") or 0.0),
+                "total_vat": float(model.get("totaalBtw") or 0.0),
+                "total_incl_vat": float(model.get("totaalIncl") or 0.0),
+                "items": items,
+                "attached_files": attached_files,
+                "model": model,
+                "dashboard": dashboard,
+            }
+
+        if self._async_http is not None:
+            return await _fetch(self._async_http, use_headers=True)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            return await _fetch(client, use_headers=False)
+
+    async def async_link_file_to_quote(
+        self, quote_id: int, file_id: int
+    ) -> dict[str, Any]:
+        """Async version of link_file_to_quote."""
+        url = f"{self.base_url}/v1/api/folderkoppel/koppel/item"
+        payload = {
+            "koppelId": int(quote_id),
+            "folders": [{"id": int(file_id), "soort": "F"}],
+            "koppelType": "OF",
+        }
+        if self._async_http is not None:
+            resp = await self._async_http.post(
+                url, json=payload, headers=self._get_headers()
+            )
+            return self._check_response(resp)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.post(url, json=payload)
+            return self._check_response(resp)
+
+    async def async_create_quote(
+        self,
+        *,
+        relation_id: int,
+        items: list[dict[str, Any]] | None = None,
+        quote_number: str | None = None,
+        date: str | None = None,
+        expiration_date: str | None = None,
+        expiration_days: int = 30,
+        status_id: int | None = None,
+        status: str | None = None,
+        template_id: int | None = None,
+        assigned_user_id: int | None = None,
+        in_ex_vat: str = "EX",
+        reference: str = "",
+        public_note: str = "",
+        internal_note: str = "",
+        invoice_email_template_id: int | str | None = None,
+        archive_file_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Async version of create_quote."""
+        meta = await self.async_get_quote_metadata()
+        resolved_status_id = resolve_quote_status_id(
+            meta["statuses"], status_id=status_id, status=status
+        )
+        resolved_number = (
+            quote_number.strip()
+            if quote_number and quote_number.strip()
+            else meta["next_quote_number"]
+        )
+        if not resolved_number:
+            raise WebSessionError(
+                "Could not determine quote_number (/v1/api/offerte/nummer/next returned empty)."
+            )
+
+        resolved_template_id = template_id
+        if resolved_template_id is None:
+            active_templates = [
+                t for t in meta["templates"] if not t.get("inactief")
+            ] or meta["templates"]
+            if active_templates and active_templates[0].get("id") is not None:
+                resolved_template_id = int(active_templates[0]["id"])
+        if resolved_template_id is None:
+            raise WebSessionError(
+                "No quote template (offertesjabloon) found in e-Boekhouden."
+            )
+
+        resolved_user_id = assigned_user_id
+        if resolved_user_id is None and meta["users"]:
+            resolved_user_id = int(meta["users"][0]["id"])
+
+        datum_dict = parse_eb_date_dict(date, default_offset_days=0)
+        verval_dict = parse_eb_date_dict(
+            expiration_date, base_date=datum_dict, default_offset_days=expiration_days
+        )
+        norm_in_ex = "IN" if str(in_ex_vat or "EX").upper() == "IN" else "EX"
+
+        header_payload: dict[str, Any] = {
+            "statusId": int(resolved_status_id),
+            "nummer": str(resolved_number),
+            "behandelGebruikerId": resolved_user_id,
+            "relatieId": int(relation_id),
+            "kenmerk": str(reference or "")[:50],
+            "datum": datum_dict,
+            "vervaldatum": verval_dict,
+            "sjabloonId": int(resolved_template_id),
+            "factuurEmailsjabloonId": (
+                invoice_email_template_id
+                if invoice_email_template_id is not None
+                else ""
+            ),
+            "notitiePubliek": str(public_note or ""),
+            "notitieIntern": str(internal_note or ""),
+            "inEx": norm_in_ex,
+        }
+
+        async def _execute_create(
+            client_obj: httpx.AsyncClient, use_headers: bool
+        ) -> int:
+            hdrs = self._get_headers() if use_headers else None
+            create_resp = self._check_response(
+                await client_obj.post(
+                    f"{self.base_url}/v1/api/offerte",
+                    json=header_payload,
+                    headers=hdrs,
+                )
+            )
+            created_id = int(
+                create_resp["id"]
+                if isinstance(create_resp, dict) and "id" in create_resp
+                else create_resp
+            )
+
+            if items:
+                need_ledgers = any(
+                    not (it.get("ledger_id") or it.get("grootboekId"))
+                    or int(it.get("ledger_id") or it.get("grootboekId") or 0)
+                    < 1_000_000
+                    for it in items
+                )
+                ledgers: list[dict[str, Any]] = []
+                if need_ledgers:
+                    gbr_resp = self._check_response(
+                        await client_obj.get(
+                            f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL",
+                            headers=hdrs,
+                        )
+                    )
+                    if isinstance(gbr_resp, list):
+                        ledgers = gbr_resp
+
+                for idx, item_data in enumerate(items, start=1):
+                    line_payload = build_quote_line_payload(
+                        item_data,
+                        quote_id=created_id,
+                        in_ex_vat=norm_in_ex,
+                        volgorde=idx,
+                        ledgers=ledgers,
+                    )
+                    self._check_response(
+                        await client_obj.post(
+                            f"{self.base_url}/v1/api/offerteregel",
+                            json=line_payload,
+                            headers=hdrs,
+                        )
+                    )
+            return created_id
+
+        if self._async_http is not None:
+            created_id = await _execute_create(self._async_http, use_headers=True)
+        else:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                headers=self._get_headers(),
+                timeout=self.timeout,
+            ) as client:
+                created_id = await _execute_create(client, use_headers=False)
+
+        if archive_file_id is not None:
+            await self.async_link_file_to_quote(
+                quote_id=created_id, file_id=int(archive_file_id)
+            )
+
+        return await self.async_get_quote(quote_id=created_id)
+
+    async def async_update_quote(
+        self,
+        *,
+        quote_id: int,
+        relation_id: int | None = None,
+        quote_number: str | None = None,
+        date: str | None = None,
+        expiration_date: str | None = None,
+        status_id: int | None = None,
+        status: str | None = None,
+        template_id: int | None = None,
+        assigned_user_id: int | None = None,
+        in_ex_vat: str | None = None,
+        reference: str | None = None,
+        public_note: str | None = None,
+        internal_note: str | None = None,
+        items: list[dict[str, Any]] | None = None,
+        replace_items: bool = True,
+        archive_file_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Async version of update_quote."""
+        qid = int(quote_id)
+
+        async def _execute_update(
+            client_obj: httpx.AsyncClient, use_headers: bool
+        ) -> None:
+            hdrs = self._get_headers() if use_headers else None
+            existing = self._check_response(
+                await client_obj.get(
+                    f"{self.base_url}/v1/api/offerte/{qid}", headers=hdrs
+                )
+            )
+            if not isinstance(existing, dict):
+                raise WebSessionError(f"Quote {qid} not found.")
+
+            resolved_status_id = existing.get("statusId")
+            if status_id is not None or status is not None:
+                statuses = self._check_response(
+                    await client_obj.get(
+                        f"{self.base_url}/v1/api/offertestatus", headers=hdrs
+                    )
+                )
+                resolved_status_id = resolve_quote_status_id(
+                    statuses if isinstance(statuses, list) else [],
+                    status_id=status_id,
+                    status=status,
+                )
+
+            datum_dict = (
+                parse_eb_date_dict(date) if date is not None else existing.get("datum")
+            )
+            verval_dict = (
+                parse_eb_date_dict(expiration_date)
+                if expiration_date is not None
+                else existing.get("vervaldatum")
+            )
+            norm_in_ex = (
+                ("IN" if str(in_ex_vat).upper() == "IN" else "EX")
+                if in_ex_vat is not None
+                else str(existing.get("inEx") or "EX")
+            )
+
+            update_payload: dict[str, Any] = {
+                "id": qid,
+                "statusId": int(resolved_status_id or 0),
+                "nummer": (
+                    str(quote_number)
+                    if quote_number is not None
+                    else existing.get("nummer")
+                ),
+                "behandelGebruikerId": (
+                    int(assigned_user_id)
+                    if assigned_user_id is not None
+                    else existing.get("behandelGebruikerId")
+                ),
+                "relatieId": (
+                    int(relation_id)
+                    if relation_id is not None
+                    else existing.get("relatieId")
+                ),
+                "kenmerk": (
+                    str(reference)[:50]
+                    if reference is not None
+                    else (existing.get("kenmerk") or "")
+                ),
+                "datum": datum_dict,
+                "vervaldatum": verval_dict,
+                "sjabloonId": (
+                    int(template_id)
+                    if template_id is not None
+                    else existing.get("sjabloonId")
+                ),
+                "factuurEmailsjabloonId": existing.get("factuurEmailsjabloonId", ""),
+                "notitiePubliek": (
+                    str(public_note)
+                    if public_note is not None
+                    else (existing.get("notitiePubliek") or "")
+                ),
+                "notitieIntern": (
+                    str(internal_note)
+                    if internal_note is not None
+                    else (existing.get("notitieIntern") or "")
+                ),
+                "inEx": norm_in_ex,
+            }
+
+            self._check_response(
+                await client_obj.put(
+                    f"{self.base_url}/v1/api/offerte",
+                    json=update_payload,
+                    headers=hdrs,
+                )
+            )
+
+            if items is not None:
+                is_incl_str = "true" if norm_in_ex == "IN" else "false"
+                regels_raw = self._check_response(
+                    await client_obj.get(
+                        f"{self.base_url}/v1/api/offerteregel/gridtable/{qid}"
+                        f"?isInclBtw={is_incl_str}&addArtikelVoorraad=false",
+                        headers=hdrs,
+                    )
+                )
+                existing_rows = parse_gridtable_rows(regels_raw)
+                start_volgorde = len(existing_rows) + 1
+                if replace_items and existing_rows:
+                    for row in existing_rows:
+                        if row.get("id") is not None:
+                            self._check_response(
+                                await client_obj.delete(
+                                    f"{self.base_url}/v1/api/offerteregel/{int(row['id'])}",
+                                    headers=hdrs,
+                                )
+                            )
+                    start_volgorde = 1
+
+                if items:
+                    need_ledgers = any(
+                        not (it.get("ledger_id") or it.get("grootboekId"))
+                        or int(it.get("ledger_id") or it.get("grootboekId") or 0)
+                        < 1_000_000
+                        for it in items
+                    )
+                    ledgers: list[dict[str, Any]] = []
+                    if need_ledgers:
+                        gbr_resp = self._check_response(
+                            await client_obj.get(
+                                f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL",
+                                headers=hdrs,
+                            )
+                        )
+                        if isinstance(gbr_resp, list):
+                            ledgers = gbr_resp
+
+                    for idx, item_data in enumerate(items, start=start_volgorde):
+                        line_payload = build_quote_line_payload(
+                            item_data,
+                            quote_id=qid,
+                            in_ex_vat=norm_in_ex,
+                            volgorde=idx,
+                            ledgers=ledgers,
+                        )
+                        self._check_response(
+                            await client_obj.post(
+                                f"{self.base_url}/v1/api/offerteregel",
+                                json=line_payload,
+                                headers=hdrs,
+                            )
+                        )
+
+        if self._async_http is not None:
+            await _execute_update(self._async_http, use_headers=True)
+        else:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                headers=self._get_headers(),
+                timeout=self.timeout,
+            ) as client:
+                await _execute_update(client, use_headers=False)
+
+        if archive_file_id is not None:
+            await self.async_link_file_to_quote(
+                quote_id=qid, file_id=int(archive_file_id)
+            )
+
+        return await self.async_get_quote(quote_id=qid)
+
+    async def async_delete_quote(self, quote_id: int) -> dict[str, Any]:
+        """Async version of delete_quote."""
+        qid = int(quote_id)
+        url = f"{self.base_url}/v1/api/offerte/{qid}"
+        if self._async_http is not None:
+            resp = await self._async_http.delete(url, headers=self._get_headers())
+            result = self._check_response(resp)
+            return {
+                "quote_id": qid,
+                "deleted": True,
+                "response": result,
+            }
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.delete(url)
+            result = self._check_response(resp)
+            return {
+                "quote_id": qid,
+                "deleted": True,
+                "response": result,
+            }
