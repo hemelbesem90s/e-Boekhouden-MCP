@@ -135,6 +135,140 @@ def parse_import_grid(raw_data: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def parse_gridtable_rows(raw_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Transform any e-Boekhouden gridtable response into dictionaries using colMetadata."""
+    if not isinstance(raw_data, dict):
+        return []
+    col_meta = raw_data.get("colMetadata", [])
+    col_names = [
+        str(col.get("name", f"col_{idx}"))
+        for idx, col in enumerate(col_meta)
+        if isinstance(col, dict)
+    ]
+    data_rows = raw_data.get("data", [])
+    rows: list[dict[str, Any]] = []
+    for item in data_rows:
+        if not isinstance(item, list):
+            continue
+        row: dict[str, Any] = {}
+        for idx, name in enumerate(col_names):
+            if idx < len(item):
+                row[name] = item[idx]
+        rows.append(row)
+    return rows
+
+
+def _vat_rate_for_code(btw_code: str | None) -> float:
+    """Resolve VAT rate multiplier from an e-Boekhouden BTW code."""
+    if not btw_code:
+        return 0.0
+    code = btw_code.upper()
+    if "21" in code:
+        return 0.21
+    if "9" in code:
+        return 0.09
+    return 0.0
+
+
+def summarize_time_entries(
+    rows: list[dict[str, Any]],
+    projects_by_id: dict[int, dict[str, Any]] | None = None,
+    activities_by_name: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Compute financial and hour/km totals and per-project WIP breakdown for time entries."""
+    proj_map = projects_by_id or {}
+    act_map = activities_by_name or {}
+
+    total_hours = 0.0
+    total_km = 0.0
+    total_excl = 0.0
+    total_vat = 0.0
+    by_project: dict[str, dict[str, Any]] = {}
+
+    for row in rows:
+        hrs = float(row.get("aantalUren") or 0.0)
+        hourly_rate = float(row.get("uurtarief") or 0.0)
+        km = float(row.get("aantalKilometers") or 0.0)
+        km_rate = float(row.get("kilometertarief") or 0.0)
+        excl = round(hrs * hourly_rate + km * km_rate, 2)
+
+        act_name = str(row.get("activiteit") or "")
+        act_info = act_map.get(act_name, {})
+        btw_code = act_info.get("btwCode")
+        if not btw_code:
+            proj_label = str(row.get("project") or "")
+            if any(tag in act_name or tag in proj_label for tag in ("BCKE", "_EU")):
+                btw_code = "BI_EU_VERK_D"
+            else:
+                btw_code = "HOOG_VERK_21"
+        vat_rate = _vat_rate_for_code(btw_code)
+        vat_amt = round(excl * vat_rate, 2)
+        incl = round(excl + vat_amt, 2)
+
+        row["amountExcl"] = excl
+        row["vatCode"] = btw_code
+        row["vatAmount"] = vat_amt
+        row["amountIncl"] = incl
+
+        proj_id = int(row.get("projectId") or 0)
+        proj_name = str(row.get("project") or f"project_{proj_id}")
+        p_meta = proj_map.get(proj_id, {})
+        if p_meta.get("relatieId") and "relatieId" not in row:
+            row["relatieId"] = p_meta["relatieId"]
+        if p_meta.get("relatie") and "relatie" not in row:
+            row["relatie"] = p_meta["relatie"]
+
+        date_str = str(row.get("datum") or "")[:10]
+        bucket = by_project.get(proj_name)
+        if bucket is None:
+            bucket = {
+                "project_id": proj_id,
+                "project": proj_name,
+                "relation_id": p_meta.get("relatieId"),
+                "client": p_meta.get("relatie"),
+                "active": p_meta.get("actief"),
+                "entry_count": 0,
+                "hours": 0.0,
+                "kilometers": 0.0,
+                "total_excl_vat": 0.0,
+                "total_vat": 0.0,
+                "total_incl_vat": 0.0,
+                "vat_code": btw_code,
+                "date_start": date_str or None,
+                "date_end": date_str or None,
+            }
+            by_project[proj_name] = bucket
+
+        bucket["entry_count"] += 1
+        bucket["hours"] = round(bucket["hours"] + hrs, 2)
+        bucket["kilometers"] = round(bucket["kilometers"] + km, 2)
+        bucket["total_excl_vat"] = round(bucket["total_excl_vat"] + excl, 2)
+        bucket["total_vat"] = round(bucket["total_vat"] + vat_amt, 2)
+        bucket["total_incl_vat"] = round(bucket["total_incl_vat"] + incl, 2)
+        if date_str:
+            if not bucket["date_start"] or date_str < bucket["date_start"]:
+                bucket["date_start"] = date_str
+            if not bucket["date_end"] or date_str > bucket["date_end"]:
+                bucket["date_end"] = date_str
+
+        total_hours = round(total_hours + hrs, 2)
+        total_km = round(total_km + km, 2)
+        total_excl = round(total_excl + excl, 2)
+        total_vat = round(total_vat + vat_amt, 2)
+
+    return {
+        "entry_count": len(rows),
+        "total_hours": total_hours,
+        "total_kilometers": total_km,
+        "total_excl_vat": total_excl,
+        "total_vat": total_vat,
+        "total_incl_vat": round(total_excl + total_vat, 2),
+        "by_project": sorted(
+            by_project.values(), key=lambda x: x["total_excl_vat"], reverse=True
+        ),
+    }
+
+
 def build_afschrift_params(
     id: int,
     rekening: str,
@@ -451,6 +585,153 @@ class WebSessionClient:
             if self._http is None:
                 client.close()
 
+    def get_time_projects(self, active_only: bool = False) -> list[dict[str, Any]]:
+        """Fetch time-tracking projects via /v1/api/project/getall and /v1/api/project/gridtable."""
+        active_flag = "true" if active_only else "false"
+        getall_url = f"{self.base_url}/v1/api/project/getall/{active_flag}"
+        grid_url = f"{self.base_url}/v1/api/project/gridtable?offset=0&limit=50&orderBy=&sortDirection=1"
+        client = self._get_sync_client()
+        try:
+            resp_all = client.get(getall_url, headers=self._get_headers())
+            raw_all = self._check_response(resp_all)
+            projects = raw_all if isinstance(raw_all, list) else []
+
+            resp_grid = client.get(grid_url, headers=self._get_headers())
+            raw_grid = self._check_response(resp_grid)
+            grid_rows = parse_gridtable_rows(raw_grid)
+            rel_by_id = {
+                int(r["id"]): r.get("relatie")
+                for r in grid_rows
+                if r.get("id") is not None
+            }
+
+            result: list[dict[str, Any]] = []
+            for p in projects:
+                if not isinstance(p, dict):
+                    continue
+                pid = int(p.get("id") or 0)
+                item = dict(p)
+                if pid in rel_by_id:
+                    item["relatie"] = rel_by_id[pid]
+                result.append(item)
+            return result
+        finally:
+            if self._http is None:
+                client.close()
+
+    def get_time_activities(self, active_only: bool = False) -> list[dict[str, Any]]:
+        """Fetch time-tracking activities and rates via /v1/api/activiteit/getall."""
+        active_flag = "true" if active_only else "false"
+        url = f"{self.base_url}/v1/api/activiteit/getall/{active_flag}"
+        client = self._get_sync_client()
+        try:
+            resp = client.get(url, headers=self._get_headers())
+            raw = self._check_response(resp)
+            return raw if isinstance(raw, list) else []
+        finally:
+            if self._http is None:
+                client.close()
+
+    def _build_time_entries_query(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        status: str,
+        project_id: int | None,
+        activity_id: int | None,
+        period_start: str | None,
+        period_end: str | None,
+        include_non_billable: bool,
+        include_notes: bool,
+    ) -> str:
+        status_norm = (status or "uninvoiced").strip().lower()
+        if status_norm in ("uninvoiced", "factureren", "wip", "open"):
+            zoeken_in = "FACTUREREN"
+        elif status_norm in ("invoiced", "gefactureerd", "billed"):
+            zoeken_in = "GEFACTUREERD"
+        else:
+            zoeken_in = "0"
+
+        params: dict[str, str] = {
+            "offset": str(offset),
+            "limit": str(min(limit, 50)),
+            "orderBy": "",
+            "sortDirection": "1",
+            "zoekenIn": zoeken_in,
+            "showOpmerkingen": "true" if include_notes else "false",
+        }
+        if include_non_billable:
+            params["nietFacturabel"] = "true"
+        if project_id:
+            params["projectId"] = str(project_id)
+        if activity_id:
+            params["activiteitId"] = str(activity_id)
+        if period_start:
+            params["periodStart"] = str(period_start)
+        if period_end:
+            params["periodEnd"] = str(period_end)
+        return f"{self.base_url}/v1/api/uur/factureren/gridtable?{urlencode(params)}"
+
+    def get_time_entries(
+        self,
+        *,
+        status: str = "uninvoiced",
+        project_id: int | None = None,
+        activity_id: int | None = None,
+        period_start: str | None = None,
+        period_end: str | None = None,
+        include_non_billable: bool = False,
+        include_notes: bool = True,
+        max_rows: int = 500,
+    ) -> dict[str, Any]:
+        """Fetch time entries from /v1/api/uur/factureren/gridtable with automatic 50-row pagination."""
+        client = self._get_sync_client()
+        try:
+            all_rows: list[dict[str, Any]] = []
+            offset = 0
+            total_row_count = 0
+            while len(all_rows) < max_rows:
+                page_limit = min(50, max_rows - len(all_rows))
+                url = self._build_time_entries_query(
+                    offset=offset,
+                    limit=page_limit,
+                    status=status,
+                    project_id=project_id,
+                    activity_id=activity_id,
+                    period_start=period_start,
+                    period_end=period_end,
+                    include_non_billable=include_non_billable,
+                    include_notes=include_notes,
+                )
+                resp = client.get(url, headers=self._get_headers())
+                raw = self._check_response(resp)
+                total_row_count = int(raw.get("rowCount", 0))
+                page_rows = parse_gridtable_rows(raw)
+                if not page_rows:
+                    break
+                all_rows.extend(page_rows)
+                offset += len(page_rows)
+                if offset >= total_row_count or len(page_rows) < 50:
+                    break
+
+            projects = self.get_time_projects(active_only=False)
+            activities = self.get_time_activities(active_only=False)
+            proj_map = {int(p["id"]): p for p in projects if p.get("id") is not None}
+            act_map = {str(a["naam"]): a for a in activities if a.get("naam")}
+
+            summary = summarize_time_entries(all_rows, proj_map, act_map)
+            return {
+                "status_filter": status,
+                "rowCount": total_row_count,
+                "fetchedCount": len(all_rows),
+                "summary": summary,
+                "rows": all_rows,
+            }
+        finally:
+            if self._http is None:
+                client.close()
+
     # ---------------- Async Methods ---------------- #
 
     async def async_get_import_grid(
@@ -732,3 +1013,141 @@ class WebSessionClient:
             timeout=self.timeout,
         ) as client:
             return await _execute_delete(client, use_headers=False)
+
+    async def async_get_time_projects(
+        self, active_only: bool = False
+    ) -> list[dict[str, Any]]:
+        """Async version of get_time_projects."""
+        active_flag = "true" if active_only else "false"
+        getall_url = f"{self.base_url}/v1/api/project/getall/{active_flag}"
+        grid_url = f"{self.base_url}/v1/api/project/gridtable?offset=0&limit=50&orderBy=&sortDirection=1"
+
+        async def _fetch(client_obj: httpx.AsyncClient, use_headers: bool) -> list[dict[str, Any]]:
+            hdrs = self._get_headers() if use_headers else None
+            resp_all = await client_obj.get(getall_url, headers=hdrs)
+            raw_all = self._check_response(resp_all)
+            projects = raw_all if isinstance(raw_all, list) else []
+
+            resp_grid = await client_obj.get(grid_url, headers=hdrs)
+            raw_grid = self._check_response(resp_grid)
+            grid_rows = parse_gridtable_rows(raw_grid)
+            rel_by_id = {
+                int(r["id"]): r.get("relatie")
+                for r in grid_rows
+                if r.get("id") is not None
+            }
+
+            result: list[dict[str, Any]] = []
+            for p in projects:
+                if not isinstance(p, dict):
+                    continue
+                pid = int(p.get("id") or 0)
+                item = dict(p)
+                if pid in rel_by_id:
+                    item["relatie"] = rel_by_id[pid]
+                result.append(item)
+            return result
+
+        if self._async_http is not None:
+            return await _fetch(self._async_http, use_headers=True)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            return await _fetch(client, use_headers=False)
+
+    async def async_get_time_activities(
+        self, active_only: bool = False
+    ) -> list[dict[str, Any]]:
+        """Async version of get_time_activities."""
+        active_flag = "true" if active_only else "false"
+        url = f"{self.base_url}/v1/api/activiteit/getall/{active_flag}"
+        if self._async_http is not None:
+            resp = await self._async_http.get(url, headers=self._get_headers())
+            raw = self._check_response(resp)
+            return raw if isinstance(raw, list) else []
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.get(url)
+            raw = self._check_response(resp)
+            return raw if isinstance(raw, list) else []
+
+    async def async_get_time_entries(
+        self,
+        *,
+        status: str = "uninvoiced",
+        project_id: int | None = None,
+        activity_id: int | None = None,
+        period_start: str | None = None,
+        period_end: str | None = None,
+        include_non_billable: bool = False,
+        include_notes: bool = True,
+        max_rows: int = 500,
+    ) -> dict[str, Any]:
+        """Async version of get_time_entries with automatic 50-row pagination."""
+
+        async def _fetch_entries(
+            client_obj: httpx.AsyncClient, use_headers: bool
+        ) -> tuple[int, list[dict[str, Any]]]:
+            hdrs = self._get_headers() if use_headers else None
+            all_rows: list[dict[str, Any]] = []
+            offset = 0
+            total_row_count = 0
+            while len(all_rows) < max_rows:
+                page_limit = min(50, max_rows - len(all_rows))
+                url = self._build_time_entries_query(
+                    offset=offset,
+                    limit=page_limit,
+                    status=status,
+                    project_id=project_id,
+                    activity_id=activity_id,
+                    period_start=period_start,
+                    period_end=period_end,
+                    include_non_billable=include_non_billable,
+                    include_notes=include_notes,
+                )
+                resp = await client_obj.get(url, headers=hdrs)
+                raw = self._check_response(resp)
+                total_row_count = int(raw.get("rowCount", 0))
+                page_rows = parse_gridtable_rows(raw)
+                if not page_rows:
+                    break
+                all_rows.extend(page_rows)
+                offset += len(page_rows)
+                if offset >= total_row_count or len(page_rows) < 50:
+                    break
+            return total_row_count, all_rows
+
+        if self._async_http is not None:
+            total_row_count, all_rows = await _fetch_entries(
+                self._async_http, use_headers=True
+            )
+        else:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                headers=self._get_headers(),
+                timeout=self.timeout,
+            ) as client:
+                total_row_count, all_rows = await _fetch_entries(
+                    client, use_headers=False
+                )
+
+        projects = await self.async_get_time_projects(active_only=False)
+        activities = await self.async_get_time_activities(active_only=False)
+        proj_map = {int(p["id"]): p for p in projects if p.get("id") is not None}
+        act_map = {str(a["naam"]): a for a in activities if a.get("naam")}
+
+        summary = summarize_time_entries(all_rows, proj_map, act_map)
+        return {
+            "status_filter": status,
+            "rowCount": total_row_count,
+            "fetchedCount": len(all_rows),
+            "summary": summary,
+            "rows": all_rows,
+        }

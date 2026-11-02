@@ -78,6 +78,9 @@ from eboekhouden_mcp.web_session.tools import (
     GetUnprocessedBankTransactionsTool,
     ListArchiveFilesTool,
     ListArchiveFoldersTool,
+    ListTimeActivitiesTool,
+    ListTimeEntriesTool,
+    ListTimeProjectsTool,
     MoveArchiveFilesTool,
     SaveWebMutationTool,
     SuggestMutationForBankStatementTool,
@@ -154,7 +157,7 @@ def register_all_tools(registry: ToolRegistry) -> None:
     registry.register(PrepareBookingProposalTool())
     registry.register(SuggestTransactionClassificationTool())
 
-    # Web session bridge (12 tools)
+    # Web session bridge (15 tools)
     registry.register(GetUnprocessedBankTransactionsTool())
     registry.register(SuggestMutationForBankStatementTool())
     registry.register(AttachFileToMutationTool())
@@ -167,6 +170,9 @@ def register_all_tools(registry: ToolRegistry) -> None:
     registry.register(CreateArchiveFolderTool())
     registry.register(UploadArchiveFileTool())
     registry.register(DeleteWebMutationsTool())
+    registry.register(ListTimeEntriesTool())
+    registry.register(ListTimeProjectsTool())
+    registry.register(ListTimeActivitiesTool())
 
 
 __all__ = [

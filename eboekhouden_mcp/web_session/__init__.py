@@ -5,7 +5,9 @@ from eboekhouden_mcp.web_session.client import (
     WebSessionClient,
     WebSessionError,
     build_afschrift_params,
+    parse_gridtable_rows,
     parse_import_grid,
+    summarize_time_entries,
 )
 from eboekhouden_mcp.web_session.tools import (
     AttachFileToMutationTool,
@@ -14,6 +16,9 @@ from eboekhouden_mcp.web_session.tools import (
     GetUnprocessedBankTransactionsTool,
     ListArchiveFilesTool,
     ListArchiveFoldersTool,
+    ListTimeActivitiesTool,
+    ListTimeEntriesTool,
+    ListTimeProjectsTool,
     SaveWebMutationTool,
     SuggestMutationForBankStatementTool,
 )
@@ -23,7 +28,9 @@ __all__ = [
     "WebSessionError",
     "SessionExpiredError",
     "build_afschrift_params",
+    "parse_gridtable_rows",
     "parse_import_grid",
+    "summarize_time_entries",
     "GetUnprocessedBankTransactionsTool",
     "SuggestMutationForBankStatementTool",
     "AttachFileToMutationTool",
@@ -32,4 +39,7 @@ __all__ = [
     "GetRecognizedInvoiceModelTool",
     "GetMutationModelByNumberTool",
     "SaveWebMutationTool",
+    "ListTimeEntriesTool",
+    "ListTimeProjectsTool",
+    "ListTimeActivitiesTool",
 ]

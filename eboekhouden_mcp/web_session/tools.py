@@ -17,13 +17,8 @@ if TYPE_CHECKING:
     from eboekhouden import EBoekhoudenClient
 
 
-def _resolve_web_client(
-    client_override: WebSessionClient | None = None,
-) -> WebSessionClient:
-    """Resolve an active WebSessionClient using injection, environment, or keyring."""
-    if client_override is not None:
-        return client_override
-
+def _lookup_live_web_token() -> str:
+    """Read the freshest web session token from environment or OS keyring."""
     token = os.environ.get("EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN") or os.environ.get(
         "EBOEKHOUDEN_WEB_SESSION_TOKEN", ""
     )
@@ -39,7 +34,23 @@ def _resolve_web_client(
                 token = keyring_token
         except Exception:  # nosec B110
             pass
+    return token.strip() if token else ""
 
+
+def _resolve_web_client(
+    client_override: WebSessionClient | None = None,
+) -> WebSessionClient:
+    """Resolve an active WebSessionClient using injection, environment, or keyring."""
+    if client_override is not None:
+        # If this is a live production client (no custom test transport injected),
+        # refresh its token from keyring/env in case the user rotated web_session_token.
+        if client_override._http is None and client_override._async_http is None:
+            live_token = _lookup_live_web_token()
+            if live_token and live_token != client_override.auth_token:
+                client_override.set_token(live_token)
+        return client_override
+
+    token = _lookup_live_web_token()
     base_url = os.environ.get(
         "EBOEKHOUDEN_MCP_WEB_SESSION_BASE_URL", "https://secure20.e-boekhouden.nl"
     )
@@ -564,4 +575,156 @@ class DeleteWebMutationsTool(BaseTool):
         return {
             "success": True,
             **result,
+        }
+
+
+class ListTimeEntriesInput(ToolSchema):
+    """Input schema for list_time_entries."""
+
+    status: str = Field(
+        default="uninvoiced",
+        description=(
+            "Filter by invoicing status: 'uninvoiced' (default, unbilled WIP hours in Uren -> Factureren), "
+            "'invoiced' (already billed hours), or 'all' (all logged hours)."
+        ),
+    )
+    project_id: int | None = Field(
+        default=None,
+        description="Optional e-Boekhouden time-tracking project ID filter",
+    )
+    activity_id: int | None = Field(
+        default=None,
+        description="Optional e-Boekhouden activity ID filter",
+    )
+    period_start: str | None = Field(
+        default=None,
+        description="Optional start date filter (YYYY-MM-DD)",
+    )
+    period_end: str | None = Field(
+        default=None,
+        description="Optional end date filter (YYYY-MM-DD)",
+    )
+    include_non_billable: bool = Field(
+        default=False,
+        description="Whether to include non-billable time entries (nietFacturabel)",
+    )
+    include_notes: bool = Field(
+        default=True,
+        description="Whether to include detailed work notes (opmerkingen) per entry",
+    )
+    max_rows: int = Field(
+        default=500,
+        ge=1,
+        le=2000,
+        description="Maximum number of time entry rows to fetch across automatic 50-row pages",
+    )
+
+
+class ListTimeEntriesTool(BaseTool):
+    """List logged hours (uninvoiced WIP, invoiced, or all) with per-project financial summary."""
+
+    name = "list_time_entries"
+    description = (
+        "Fetch logged time entries and uninvoiced WIP hours from e-Boekhouden Urenregistratie "
+        "(/v1/api/uur/factureren/gridtable) with automatic 50-row pagination and a per-project "
+        "breakdown of hours, kilometers, and amounts (excl./incl. VAT)."
+    )
+    input_schema = ListTimeEntriesInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        return await web_client.async_get_time_entries(
+            status=str(arguments.get("status", "uninvoiced")),
+            project_id=arguments.get("project_id"),
+            activity_id=arguments.get("activity_id"),
+            period_start=arguments.get("period_start"),
+            period_end=arguments.get("period_end"),
+            include_non_billable=bool(arguments.get("include_non_billable", False)),
+            include_notes=bool(arguments.get("include_notes", True)),
+            max_rows=int(arguments.get("max_rows", 500)),
+        )
+
+
+class ListTimeProjectsInput(ToolSchema):
+    """Input schema for list_time_projects."""
+
+    active_only: bool = Field(
+        default=False,
+        description="If true, return only active time-tracking projects",
+    )
+
+
+class ListTimeProjectsTool(BaseTool):
+    """List time-tracking projects in e-Boekhouden Urenregistratie."""
+
+    name = "list_time_projects"
+    description = (
+        "List time-tracking projects and their linked client relations from e-Boekhouden "
+        "Urenregistratie (/v1/api/project/getall and /v1/api/project/gridtable)."
+    )
+    input_schema = ListTimeProjectsInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        active_only = bool(arguments.get("active_only", False))
+        projects = await web_client.async_get_time_projects(active_only=active_only)
+        return {
+            "count": len(projects),
+            "projects": projects,
+        }
+
+
+class ListTimeActivitiesInput(ToolSchema):
+    """Input schema for list_time_activities."""
+
+    active_only: bool = Field(
+        default=False,
+        description="If true, return only active time-tracking activities",
+    )
+
+
+class ListTimeActivitiesTool(BaseTool):
+    """List time-tracking activities and their hourly/kilometer rates."""
+
+    name = "list_time_activities"
+    description = (
+        "List time-tracking activities, hourly rates, kilometer rates, VAT codes, and revenue ledgers "
+        "from e-Boekhouden Urenregistratie (/v1/api/activiteit/getall)."
+    )
+    input_schema = ListTimeActivitiesInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        active_only = bool(arguments.get("active_only", False))
+        activities = await web_client.async_get_time_activities(active_only=active_only)
+        return {
+            "count": len(activities),
+            "activities": activities,
         }

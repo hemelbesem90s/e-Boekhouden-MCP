@@ -54,6 +54,9 @@ WEB_SESSION_TOOL_NAMES = frozenset(
         "create_archive_folder",
         "upload_archive_file",
         "delete_web_mutations",
+        "list_time_entries",
+        "list_time_projects",
+        "list_time_activities",
     }
 )
 

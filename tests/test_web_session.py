@@ -786,3 +786,181 @@ async def test_upload_and_delete_tools():
     )
     assert del_res["success"] is True
     assert del_res["resolved_ids"] == {42: 90001}
+
+
+def test_get_time_entries_autopagination_and_summary():
+    """Verify 50-row auto-pagination and project/VAT summary calculation for time entries."""
+    from eboekhouden_mcp.web_session.tools import (
+        ListTimeActivitiesTool,
+        ListTimeEntriesTool,
+        ListTimeProjectsTool,
+        _resolve_web_client,
+    )
+
+    col_meta = [
+        {"name": "id", "index": 0},
+        {"name": "datum", "index": 1},
+        {"name": "medewerker", "index": 2},
+        {"name": "projectId", "index": 3},
+        {"name": "project", "index": 4},
+        {"name": "activiteit", "index": 5},
+        {"name": "aantalUren", "index": 6},
+        {"name": "facturabel", "index": 7},
+        {"name": "uurtarief", "index": 8},
+        {"name": "factuur", "index": 9},
+        {"name": "aantalKilometers", "index": 10},
+        {"name": "kilometertarief", "index": 11},
+        {"name": "factuurId", "index": 12},
+        {"name": "opmerkingen", "index": 13},
+    ]
+
+    page1_rows = [
+        [
+            1000 + i,
+            "2026-10-15T00:00:00",
+            "JacobGrobler",
+            851957,
+            "25011E_BCKE_SSB_Opmeten",
+            "Engineering_EU",
+            2.0,
+            "Ja",
+            75.0,
+            None,
+            None,
+            0.30,
+            None,
+            "CAD work",
+        ]
+        for i in range(50)
+    ]
+    page2_rows = [
+        [
+            2001,
+            "2026-10-28T00:00:00",
+            "JacobGrobler",
+            842044,
+            "26014S_MSTG_Kraker_Project_Support",
+            "MSTG_Consult",
+            3.0,
+            "Ja",
+            75.0,
+            None,
+            40.0,
+            0.0,
+            None,
+            "Kraker consult",
+        ]
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/v1/api/uur/factureren/gridtable" in url:
+            if "offset=0" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "rowCount": 51,
+                        "colMetadata": col_meta,
+                        "data": page1_rows,
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "rowCount": 51,
+                    "colMetadata": col_meta,
+                    "data": page2_rows,
+                },
+            )
+        if "/v1/api/project/getall/" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 851957,
+                        "relatieId": 70666369,
+                        "naam": "25011E_BCKE_SSB_Opmeten",
+                        "actief": True,
+                        "facturabel": True,
+                    },
+                    {
+                        "id": 842044,
+                        "relatieId": 70666523,
+                        "naam": "26014S_MSTG_Kraker_Project_Support",
+                        "actief": True,
+                        "facturabel": True,
+                    },
+                ],
+            )
+        if "/v1/api/project/gridtable" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "colMetadata": [
+                        {"name": "id", "index": 0},
+                        {"name": "project", "index": 1},
+                        {"name": "relatie", "index": 2},
+                    ],
+                    "data": [
+                        [851957, "25011E_BCKE_SSB_Opmeten", "Baecke BV"],
+                        [842044, "26014S_MSTG_Kraker_Project_Support", "MST Groep B.V."],
+                    ],
+                },
+            )
+        if "/v1/api/activiteit/getall/" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 629937,
+                        "naam": "Engineering_EU",
+                        "uurtarief": 75.0,
+                        "kilometertarief": 0.30,
+                        "btwCode": "BI_EU_VERK_D",
+                        "actief": True,
+                    },
+                    {
+                        "id": 629916,
+                        "naam": "MSTG_Consult",
+                        "uurtarief": 75.0,
+                        "kilometertarief": 0.0,
+                        "btwCode": "HOOG_VERK_21",
+                        "actief": True,
+                    },
+                ],
+            )
+        return httpx.Response(404)
+
+    mock_http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = WebSessionClient(auth_token="jwt-eb-token", http_client=mock_http)
+
+    res = client.get_time_entries(status="uninvoiced")
+    assert res["rowCount"] == 51
+    assert res["fetchedCount"] == 51
+    summary = res["summary"]
+    assert summary["entry_count"] == 51
+    assert summary["total_hours"] == 103.0
+    assert summary["total_kilometers"] == 40.0
+    assert summary["total_excl_vat"] == 7725.0
+    assert summary["total_vat"] == 47.25
+    assert summary["total_incl_vat"] == 7772.25
+    assert len(summary["by_project"]) == 2
+    assert summary["by_project"][0]["project"] == "25011E_BCKE_SSB_Opmeten"
+    assert summary["by_project"][0]["client"] == "Baecke BV"
+
+    # Also test live token refresh on non-mock WebSessionClient
+    live_client = WebSessionClient(auth_token="stale-token")
+    import os
+    old_env = os.environ.get("EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN")
+    try:
+        os.environ["EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN"] = "fresh-rotated-token"
+        resolved = _resolve_web_client(live_client)
+        assert resolved.auth_token == "fresh-rotated-token"
+    finally:
+        if old_env is None:
+            os.environ.pop("EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN", None)
+        else:
+            os.environ["EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN"] = old_env
+        assert ListTimeEntriesTool.name == "list_time_entries"
+        assert ListTimeProjectsTool.name == "list_time_projects"
+        assert ListTimeActivitiesTool.name == "list_time_activities"
