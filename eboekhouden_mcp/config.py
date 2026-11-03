@@ -248,3 +248,8 @@ class MCPConfig(BaseSettings):
             self.archive_root = archive_root
 
         return self
+
+
+def load_settings(**kwargs: Any) -> MCPConfig:
+    """Instantiate and return the validated MCPConfig settings."""
+    return MCPConfig(**kwargs)

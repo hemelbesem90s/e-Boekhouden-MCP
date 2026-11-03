@@ -32,6 +32,7 @@ from eboekhouden_mcp.web_session.tools import (
     SaveWebMutationTool,
     SuggestMutationForBankStatementTool,
     UpdateQuoteTool,
+    SendInvoiceTool,
 )
 
 __all__ = [
@@ -64,4 +65,5 @@ __all__ = [
     "UpdateQuoteTool",
     "AttachFileToQuoteTool",
     "DeleteQuoteTool",
+    "SendInvoiceTool",
 ]

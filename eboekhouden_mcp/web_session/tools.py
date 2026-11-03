@@ -1224,3 +1224,105 @@ class DeleteQuoteTool(BaseTool):
             "success": True,
             **result,
         }
+
+
+class SendInvoiceInput(ToolSchema):
+    """Input schema for send_invoice."""
+
+    invoice_id: int = Field(ge=1, description="Internal invoice ID (e.g. 73143509)")
+    email_template_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Email template ID to format subject and body (e.g. 1332610 for 'Normaal Factuur')",
+    )
+    recipient_email: str | None = Field(
+        default=None,
+        description="Recipient email address (defaults to customer email configured on invoice/template)",
+    )
+    subject: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Custom email subject (overrides template subject)",
+    )
+    body: str | None = Field(
+        default=None,
+        max_length=100000,
+        description="Custom email body HTML or text (overrides template body)",
+    )
+    sender_email: str | None = Field(
+        default=None,
+        max_length=150,
+        description="Sender email address (overrides default administration email)",
+    )
+    sender_name: str | None = Field(
+        default=None,
+        max_length=100,
+        description="Sender display name (overrides default sender name)",
+    )
+    cc_email: str | None = Field(
+        default=None,
+        max_length=150,
+        description="CC email address (optional)",
+    )
+    bcc_email: str | None = Field(
+        default=None,
+        max_length=150,
+        description="BCC email address (optional)",
+    )
+    attach_ubl: bool = Field(
+        default=True,
+        description="Whether to attach the UBL e-invoice XML file (defaults to true)",
+    )
+
+
+class SendInvoiceTool(BaseTool):
+    """Send an existing invoice by email via the web session API."""
+
+    name = "send_invoice"
+    description = (
+        "Send an already-created invoice to a customer by email via POST /v1/api/factuur/mail. "
+        "Supports formatting with an email template (e.g. template 1332610 'Normaal Factuur'), "
+        "custom subjects/bodies, and attaching the UBL e-invoice XML."
+    )
+    input_schema = SendInvoiceInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        invoice_id = int(arguments["invoice_id"])
+        recipient_email = arguments.get("recipient_email")
+
+        # Fallback to REST client relation email if recipient_email is not specified
+        if not recipient_email and client is not None:
+            try:
+                inv = client.invoices.get(invoice_id)
+                if inv.relation_id:
+                    rel = client.relations.get(inv.relation_id)
+                    recipient_email = rel.email
+            except Exception:
+                pass
+
+        result = await web_client.async_send_invoice_email(
+            invoice_id=invoice_id,
+            recipient_email=recipient_email,
+            sender_email=arguments.get("sender_email"),
+            sender_name=arguments.get("sender_name"),
+            subject=arguments.get("subject"),
+            body=arguments.get("body"),
+            cc_email=arguments.get("cc_email"),
+            bcc_email=arguments.get("bcc_email"),
+            attach_ubl=arguments.get("attach_ubl", True),
+            email_template_id=arguments.get("email_template_id"),
+        )
+        return {
+            "success": True,
+            **result,
+        }

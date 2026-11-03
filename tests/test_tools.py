@@ -75,12 +75,12 @@ class TestRegisterAllTools:
     """Tests for registering all tools."""
 
     def test_registers_all_tools(self):
-        """Test that all tools are registered (37 base + 14 power + 3 inbox + 21 web = 75)."""
+        """Test that all tools are registered (37 base + 14 power + 3 inbox + 22 web = 76)."""
         registry = ToolRegistry()
         register_all_tools(registry)
 
-        # 37 base tools + 14 power tools + 3 inbox tools + 21 web session tools
-        assert len(registry) == 75
+        # 37 base tools + 14 power tools + 3 inbox tools + 22 web session tools
+        assert len(registry) == 76
 
     def test_tool_categories(self):
         """Test that tools from all categories are registered."""
@@ -157,6 +157,13 @@ class TestToolSchemas:
         assert schema["properties"]["items"]["minItems"] == 1
         assert schema["properties"]["items"]["maxItems"] == 500
         assert schema["$defs"]["InvoiceItemInput"]["additionalProperties"] is False
+        assert (
+            schema["$defs"]["CreateInvoiceEmailInput"]["additionalProperties"] is False
+        )
+        assert (
+            schema["$defs"]["CreateInvoiceMutationInput"]["additionalProperties"]
+            is False
+        )
 
         with pytest.raises(ValidationError):
             CreateInvoiceInput(
@@ -165,6 +172,91 @@ class TestToolSchemas:
                 template_id=1,
                 items=[{"description": "Missing required line fields"}],
             )
+
+    @pytest.mark.asyncio
+    async def test_create_invoice_tool_passes_all_fields(self):
+        from unittest.mock import MagicMock
+        from eboekhouden.models.invoice import CreatedInvoice
+        from eboekhouden_mcp.tools.invoices import CreateInvoiceTool
+
+        mock_client = MagicMock()
+        mock_client.invoices.create.return_value = CreatedInvoice(
+            id=73143509, invoice_number="F00061", in_ex_vat="EX"
+        )
+
+        tool = CreateInvoiceTool()
+        args = {
+            "relation_id": 70666663,
+            "term_of_payment": 30,
+            "template_id": 1532614,
+            "invoice_number": "F00061",
+            "date": "2026-11-03",
+            "in_ex_vat": "EX",
+            "email_template_id": 1332610,
+            "reference": "26076D_XNDR",
+            "text": "Invoice notes",
+            "print": False,
+            "items": [
+                {
+                    "description": "26076D XNDR - Regenpijpbeschermer",
+                    "vat_code": "HOOG_VERK_21",
+                    "ledger_id": 51798501,
+                    "quantity": 3.0,
+                    "price_per_unit": 75.0,
+                    "cost_center_id": 492221,
+                    "unit_id": 3192209,
+                    "code": "UREN",
+                    "product_id": 1001,
+                    "vat_amount": 47.25,
+                    "discount_amount": 0.0,
+                    "discount_percentage": 0.0,
+                }
+            ],
+            "email": {
+                "from_email": "jacob@groblerengineering.nl",
+                "from_name": "Jacob Grobler",
+                "subject": "Factuur F00061",
+                "body": "Beste Xander, hierbij de factuur.",
+                "attach_ubl": True,
+            },
+            "mutation": {
+                "description": "26076D XNDR - Factuur F00061",
+                "check_payment_reference": True,
+                "payment_reference": "26076D",
+                "ledger_id": 51798176,
+            },
+        }
+
+        result = await tool.execute(mock_client, args)
+        assert result["id"] == 73143509
+        assert result["invoice_number"] == "F00061"
+
+        mock_client.invoices.create.assert_called_once()
+        inv_arg = mock_client.invoices.create.call_args[0][0]
+        assert inv_arg.relation_id == 70666663
+        assert inv_arg.email_template_id == 1332610
+        assert inv_arg.print is False
+        assert inv_arg.email is not None
+        assert inv_arg.email.from_email == "jacob@groblerengineering.nl"
+        assert inv_arg.email.attach_ubl is True
+        assert inv_arg.mutation is not None
+        assert inv_arg.mutation.ledger_id == 51798176
+        assert len(inv_arg.items) == 1
+        item = inv_arg.items[0]
+        assert item.unit_id == 3192209
+        assert item.code == "UREN"
+        assert item.product_id == 1001
+        assert float(item.vat_amount) == 47.25
+
+    def test_send_invoice_schema(self):
+        from eboekhouden_mcp.web_session.tools import SendInvoiceInput
+
+        schema = SendInvoiceInput.model_json_schema()
+        assert schema["additionalProperties"] is False
+        assert "invoice_id" in schema["required"]
+
+        with pytest.raises(ValidationError):
+            SendInvoiceInput(invoice_id=73143509, unexpected_param="bad")
 
     def test_tool_inputs_reject_unknown_fields(self):
         with pytest.raises(ValidationError):

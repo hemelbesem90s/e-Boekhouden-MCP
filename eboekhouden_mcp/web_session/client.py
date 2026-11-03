@@ -1493,6 +1493,119 @@ class WebSessionClient:
             if self._http is None:
                 client.close()
 
+    def get_invoice_mail_data(
+        self, invoice_id: int, template_id: int | None = None
+    ) -> dict[str, Any]:
+        """Fetch pre-rendered email template and recipient data for an invoice."""
+        if template_id is not None:
+            url = f"{self.base_url}/v1/api/factuur/maildata/{int(template_id)}/{int(invoice_id)}"
+        else:
+            url = f"{self.base_url}/v1/api/factuur/{int(invoice_id)}/maildata"
+
+        client = self._get_sync_client()
+        try:
+            resp = client.get(url, headers=self._get_headers())
+            result = self._check_response(resp)
+            return result if isinstance(result, dict) else {}
+        finally:
+            if self._http is None:
+                client.close()
+
+    def send_invoice_email(
+        self,
+        invoice_id: int,
+        recipient_email: str | None = None,
+        sender_email: str | None = None,
+        sender_name: str | None = None,
+        subject: str | None = None,
+        body: str | None = None,
+        cc_email: str | None = None,
+        bcc_email: str | None = None,
+        attach_ubl: bool = True,
+        email_template_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Send an invoice by email via POST /v1/api/factuur/mail."""
+        mail_data: dict[str, Any] = {}
+        if email_template_id is not None or not (recipient_email and subject and body):
+            try:
+                mail_data = self.get_invoice_mail_data(
+                    invoice_id=invoice_id, template_id=email_template_id
+                )
+            except Exception:
+                mail_data = {}
+
+        resolved_recipient = recipient_email
+        if not resolved_recipient:
+            resolved_recipient = mail_data.get("emailAan")
+            if not resolved_recipient and isinstance(mail_data.get("to"), list):
+                emails = [
+                    t.get("email")
+                    for t in mail_data["to"]
+                    if isinstance(t, dict) and t.get("email")
+                ]
+                if emails:
+                    resolved_recipient = ", ".join(emails)
+
+        if not resolved_recipient:
+            raise ValueError(
+                f"No recipient email address found for invoice {invoice_id}. "
+                "Specify recipient_email explicitly."
+            )
+
+        resolved_subject = (
+            subject or mail_data.get("subject") or f"Factuur {invoice_id}"
+        )
+        resolved_body = body or mail_data.get("body") or ""
+        resolved_from_email = (
+            sender_email or mail_data.get("emailVan") or mail_data.get("vanEmail") or ""
+        )
+        resolved_from_name = (
+            sender_name or mail_data.get("naam") or mail_data.get("vanNaam") or ""
+        )
+        resolved_cc = cc_email or mail_data.get("ccEmail") or mail_data.get("cc") or ""
+        resolved_bcc = (
+            bcc_email or mail_data.get("bccEmail") or mail_data.get("bcc") or ""
+        )
+
+        payload: dict[str, Any] = {
+            "factuurId": int(invoice_id),
+            "aanEmail": str(resolved_recipient),
+            "vanEmail": str(resolved_from_email),
+            "vanNaam": str(resolved_from_name),
+            "ccEmail": str(resolved_cc),
+            "bccEmail": str(resolved_bcc),
+            "subject": str(resolved_subject),
+            "body": str(resolved_body),
+            "factuurUbl": bool(attach_ubl),
+            "rememberMessage": False,
+            "useEmailSjabloon": False,
+            "bijlagen": [],
+        }
+
+        url = f"{self.base_url}/v1/api/factuur/mail"
+        client = self._get_sync_client()
+        try:
+            resp = client.post(url, json=payload, headers=self._get_headers())
+            result = self._check_response(resp)
+            if isinstance(result, dict):
+                error_count = result.get("errorCount", 0)
+                error_msg = result.get("errorMessage")
+                if (error_count and error_count > 0) or error_msg:
+                    raise WebSessionError(
+                        f"Failed to send invoice email for invoice {invoice_id}: {error_msg or 'errorCount > 0'}"
+                    )
+            return {
+                "success": True,
+                "invoice_id": int(invoice_id),
+                "recipient_email": str(resolved_recipient),
+                "subject": str(resolved_subject),
+                "attach_ubl": bool(attach_ubl),
+                "response": result,
+            }
+        finally:
+            if self._http is None:
+                client.close()
+
     # ---------------- Async Methods ---------------- #
 
     async def async_get_import_grid(
@@ -2499,3 +2612,129 @@ class WebSessionClient:
                 "deleted": True,
                 "response": result,
             }
+
+    async def async_get_invoice_mail_data(
+        self, invoice_id: int, template_id: int | None = None
+    ) -> dict[str, Any]:
+        """Async version of get_invoice_mail_data."""
+        if template_id is not None:
+            url = f"{self.base_url}/v1/api/factuur/maildata/{int(template_id)}/{int(invoice_id)}"
+        else:
+            url = f"{self.base_url}/v1/api/factuur/{int(invoice_id)}/maildata"
+
+        if self._async_http is not None:
+            resp = await self._async_http.get(url, headers=self._get_headers())
+            result = self._check_response(resp)
+            return result if isinstance(result, dict) else {}
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.get(url)
+            result = self._check_response(resp)
+            return result if isinstance(result, dict) else {}
+
+    async def async_send_invoice_email(
+        self,
+        invoice_id: int,
+        recipient_email: str | None = None,
+        sender_email: str | None = None,
+        sender_name: str | None = None,
+        subject: str | None = None,
+        body: str | None = None,
+        cc_email: str | None = None,
+        bcc_email: str | None = None,
+        attach_ubl: bool = True,
+        email_template_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Async version of send_invoice_email."""
+        mail_data: dict[str, Any] = {}
+        if email_template_id is not None or not (recipient_email and subject and body):
+            try:
+                mail_data = await self.async_get_invoice_mail_data(
+                    invoice_id=invoice_id, template_id=email_template_id
+                )
+            except Exception:
+                mail_data = {}
+
+        resolved_recipient = recipient_email
+        if not resolved_recipient:
+            resolved_recipient = mail_data.get("emailAan")
+            if not resolved_recipient and isinstance(mail_data.get("to"), list):
+                emails = [
+                    t.get("email")
+                    for t in mail_data["to"]
+                    if isinstance(t, dict) and t.get("email")
+                ]
+                if emails:
+                    resolved_recipient = ", ".join(emails)
+
+        if not resolved_recipient:
+            raise ValueError(
+                f"No recipient email address found for invoice {invoice_id}. "
+                "Specify recipient_email explicitly."
+            )
+
+        resolved_subject = (
+            subject or mail_data.get("subject") or f"Factuur {invoice_id}"
+        )
+        resolved_body = body or mail_data.get("body") or ""
+        resolved_from_email = (
+            sender_email or mail_data.get("emailVan") or mail_data.get("vanEmail") or ""
+        )
+        resolved_from_name = (
+            sender_name or mail_data.get("naam") or mail_data.get("vanNaam") or ""
+        )
+        resolved_cc = cc_email or mail_data.get("ccEmail") or mail_data.get("cc") or ""
+        resolved_bcc = (
+            bcc_email or mail_data.get("bccEmail") or mail_data.get("bcc") or ""
+        )
+
+        payload: dict[str, Any] = {
+            "factuurId": int(invoice_id),
+            "aanEmail": str(resolved_recipient),
+            "vanEmail": str(resolved_from_email),
+            "vanNaam": str(resolved_from_name),
+            "ccEmail": str(resolved_cc),
+            "bccEmail": str(resolved_bcc),
+            "subject": str(resolved_subject),
+            "body": str(resolved_body),
+            "factuurUbl": bool(attach_ubl),
+            "rememberMessage": False,
+            "useEmailSjabloon": False,
+            "bijlagen": [],
+        }
+
+        url = f"{self.base_url}/v1/api/factuur/mail"
+        if self._async_http is not None:
+            resp = await self._async_http.post(
+                url, json=payload, headers=self._get_headers()
+            )
+            result = self._check_response(resp)
+        else:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                headers=self._get_headers(),
+                timeout=self.timeout,
+            ) as client:
+                resp = await client.post(url, json=payload)
+                result = self._check_response(resp)
+
+        if isinstance(result, dict):
+            error_count = result.get("errorCount", 0)
+            error_msg = result.get("errorMessage")
+            if (error_count and error_count > 0) or error_msg:
+                raise WebSessionError(
+                    f"Failed to send invoice email for invoice {invoice_id}: {error_msg or 'errorCount > 0'}"
+                )
+
+        return {
+            "success": True,
+            "invoice_id": int(invoice_id),
+            "recipient_email": str(resolved_recipient),
+            "subject": str(resolved_subject),
+            "attach_ubl": bool(attach_ubl),
+            "response": result,
+        }

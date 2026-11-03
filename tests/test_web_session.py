@@ -1601,3 +1601,120 @@ async def test_async_quote_tools():
     assert del_res["deleted"] is True
 
     await async_http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_send_invoice_web_session_sync_and_async():
+    """Verify sync and async invoice emailing via web session API."""
+    from eboekhouden_mcp.web_session.tools import SendInvoiceTool
+
+    captured_posts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/v1/api/factuur/maildata/1332610/73143509" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "subject": "Factuur F00061 - Las- en Constructiewerk Xander Verbunt B.V.",
+                    "body": "<p>Beste Xander, hierbij uw factuur F00061.</p>",
+                    "emailAan": "Xanderverbunt@gmail.com",
+                    "naam": "Jacob Grobler",
+                    "emailVan": "jacob@groblerengineering.nl",
+                    "ccEmail": "",
+                    "bccEmail": "",
+                },
+            )
+        if "/v1/api/factuur/73143509/maildata" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "subject": "Factuur F00061",
+                    "body": "<p>Standaard factuur maildata</p>",
+                    "emailAan": "Xanderverbunt@gmail.com",
+                    "naam": "Jacob Grobler",
+                    "emailVan": "jacob@groblerengineering.nl",
+                },
+            )
+        if "/v1/api/factuur/mail" in url and request.method == "POST":
+            body = json.loads(request.content.decode("utf-8"))
+            captured_posts.append(body)
+            if body.get("aanEmail") == "error@example.com":
+                return httpx.Response(
+                    200, json={"errorCount": 1, "errorMessage": "Invalid email host"}
+                )
+            return httpx.Response(200, json={"errorCount": 0, "errorMessage": None})
+        return httpx.Response(404, json={"error": f"Not found: {url}"})
+
+    sync_transport = httpx.MockTransport(handler)
+    sync_http = httpx.Client(
+        transport=sync_transport, base_url="https://secure20.e-boekhouden.nl"
+    )
+    client = WebSessionClient(auth_token="test-token")
+    client._http = sync_http
+
+    # 1. Sync get_invoice_mail_data
+    mail_data = client.get_invoice_mail_data(invoice_id=73143509, template_id=1332610)
+    assert mail_data["subject"].startswith("Factuur F00061")
+    assert mail_data["emailAan"] == "Xanderverbunt@gmail.com"
+
+    # 2. Sync send_invoice_email using template
+    res_sync = client.send_invoice_email(
+        invoice_id=73143509,
+        email_template_id=1332610,
+    )
+    assert res_sync["success"] is True
+    assert res_sync["recipient_email"] == "Xanderverbunt@gmail.com"
+    assert captured_posts[-1]["factuurId"] == 73143509
+    assert captured_posts[-1]["aanEmail"] == "Xanderverbunt@gmail.com"
+    assert captured_posts[-1]["factuurUbl"] is True
+
+    # 3. Async send_invoice_email with custom overrides
+    async_transport = httpx.MockTransport(handler)
+    async_http = httpx.AsyncClient(
+        transport=async_transport, base_url="https://secure20.e-boekhouden.nl"
+    )
+    client._async_http = async_http
+
+    res_async = await client.async_send_invoice_email(
+        invoice_id=73143509,
+        recipient_email="custom@verbunt.nl",
+        subject="Aangepast onderwerp F00061",
+        body="Aangepaste body",
+        attach_ubl=False,
+    )
+    assert res_async["success"] is True
+    assert res_async["recipient_email"] == "custom@verbunt.nl"
+    assert captured_posts[-1]["aanEmail"] == "custom@verbunt.nl"
+    assert captured_posts[-1]["subject"] == "Aangepast onderwerp F00061"
+    assert captured_posts[-1]["factuurUbl"] is False
+
+    # 4. Error handling
+    with pytest.raises(WebSessionError, match="Invalid email host"):
+        await client.async_send_invoice_email(
+            invoice_id=73143509,
+            recipient_email="error@example.com",
+            subject="Test error",
+            body="Test error body",
+        )
+
+    # 5. SendInvoiceTool execution with REST client relation fallback
+    from unittest.mock import MagicMock
+
+    mock_sdk = MagicMock()
+    mock_sdk.invoices.get.return_value = MagicMock(relation_id=70666663)
+    mock_sdk.relations.get.return_value = MagicMock(email="fallback@verbunt.nl")
+
+    tool = SendInvoiceTool(client=client)
+    tool_res = await tool.execute(
+        mock_sdk,
+        {
+            "invoice_id": 73143509,
+            "email_template_id": 1332610,
+        },
+    )
+    assert tool_res["success"] is True
+    assert tool_res["invoice_id"] == 73143509
+
+    sync_http.close()
+    await async_http.aclose()

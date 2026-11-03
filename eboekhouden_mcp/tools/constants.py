@@ -29,6 +29,7 @@ WRITE_TOOL_NAMES = frozenset(
         "update_quote",
         "attach_file_to_quote",
         "delete_quote",
+        "send_invoice",
     }
 )
 
@@ -68,6 +69,7 @@ WEB_SESSION_TOOL_NAMES = frozenset(
         "update_quote",
         "attach_file_to_quote",
         "delete_quote",
+        "send_invoice",
     }
 )
 

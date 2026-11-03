@@ -127,7 +127,7 @@ def test_archive_tool_is_registered():
     register_all_tools(registry)
 
     assert "send_file_to_digital_archive" in registry
-    assert len(registry) == 75  # 37 base + 14 power + 24 extensions
+    assert len(registry) == 76  # 37 base + 14 power + 25 extensions
 
 
 @pytest.mark.asyncio

@@ -72,6 +72,36 @@ def test_format_write_prompt_invoice_fallback_relation():
     assert prompt == "e-Boekhouden MCP: Approve POST Invoice to Relation [Relation]?"
 
 
+def test_format_write_prompt_invoice_with_email():
+    prompt = format_write_prompt(
+        "create_invoice",
+        {
+            "relation_id": 70666663,
+            "amount": 272.25,
+            "email_template_id": 1332610,
+        },
+    )
+    assert (
+        prompt
+        == "e-Boekhouden MCP: Approve POST & Email (Template 1332610) Invoice for EUR 272.25 to Relation 70666663?"
+    )
+
+
+def test_format_write_prompt_send_invoice():
+    prompt = format_write_prompt(
+        "send_invoice",
+        {
+            "invoice_id": 73143509,
+            "recipient_email": "Xanderverbunt@gmail.com",
+            "email_template_id": 1332610,
+        },
+    )
+    assert (
+        prompt
+        == "e-Boekhouden MCP: Approve Send Invoice ID 73143509 to Xanderverbunt@gmail.com using Template 1332610?"
+    )
+
+
 def test_format_write_prompt_quote():
     prompt = format_write_prompt(
         "create_quote",

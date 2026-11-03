@@ -70,9 +70,26 @@ def format_write_prompt(tool_name: str, arguments: dict[str, Any]) -> str:
             except (ValueError, TypeError):
                 amount_val = None
 
+        email_part = ""
+        if args.get("email_template_id") or args.get("email"):
+            tmpl = args.get("email_template_id")
+            email_part = f" & Email (Template {tmpl})" if tmpl else " & Email"
+
         if amount_val is not None:
-            return f"e-Boekhouden MCP: Approve POST Invoice for EUR {_format_currency(amount_val)} to Relation {relation_id}?"
-        return f"e-Boekhouden MCP: Approve POST Invoice to Relation {relation_id}?"
+            return f"e-Boekhouden MCP: Approve POST{email_part} Invoice for EUR {_format_currency(amount_val)} to Relation {relation_id}?"
+        return f"e-Boekhouden MCP: Approve POST{email_part} Invoice to Relation {relation_id}?"
+
+    # Send Invoice (Web Session Bridge)
+    if tool_name == "send_invoice" or ("invoice" in tool_name and "send" in tool_name):
+        invoice_id = args.get("invoice_id", "[Invoice]")
+        recipient = (
+            args.get("recipient_email")
+            or args.get("email")
+            or f"Relation {args.get('relation_id', '[Customer]')}"
+        )
+        template_id = args.get("email_template_id")
+        template_str = f" using Template {template_id}" if template_id else ""
+        return f"e-Boekhouden MCP: Approve Send Invoice ID {invoice_id} to {recipient}{template_str}?"
 
     # Quotes (Offertes)
     if tool_name in ("create_quote", "update_quote"):

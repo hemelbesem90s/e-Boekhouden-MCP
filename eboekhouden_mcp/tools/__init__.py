@@ -88,6 +88,7 @@ from eboekhouden_mcp.web_session.tools import (
     ListTimeProjectsTool,
     MoveArchiveFilesTool,
     SaveWebMutationTool,
+    SendInvoiceTool,
     SuggestMutationForBankStatementTool,
     UpdateQuoteTool,
     UploadArchiveFileTool,
@@ -185,6 +186,7 @@ def register_all_tools(registry: ToolRegistry) -> None:
     registry.register(UpdateQuoteTool())
     registry.register(AttachFileToQuoteTool())
     registry.register(DeleteQuoteTool())
+    registry.register(SendInvoiceTool())
 
 
 __all__ = [

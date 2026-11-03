@@ -1,6 +1,6 @@
 # Tool catalog
 
-The server registers 75 tools across four architectural layers. The default surface contains 50 read-only tools (36 core REST v1 tools, 3 AI Bookkeeping Inbox tools, and 11 web session inspection tools). Enabling writes exposes 25 write tools (14 accounting write tools, 1 archive tool, and 10 web session write tools), gated behind explicit confirmation and native OS biometrics.
+The server registers 76 tools across four architectural layers. The default surface contains 50 read-only tools (36 core REST v1 tools, 3 AI Bookkeeping Inbox tools, and 11 web session inspection tools). Enabling writes exposes 26 write tools (14 accounting write tools, 1 archive tool, and 11 web session write tools), gated behind explicit confirmation and native OS biometrics.
 
 ## Search and batch detail
 
@@ -73,6 +73,7 @@ The server registers 75 tools across four architectural layers. The default surf
 | `update_quote` | Update an existing quote's status, metadata, line items, or attached Digital Archive PDF. | Opt-in Write |
 | `attach_file_to_quote` | Attach a Digital Archive file (such as a branded PDF offer) to a quote (`koppelType='OF'`). | Opt-in Write |
 | `delete_quote` | Delete a quote by ID via `DELETE /v1/api/offerte/{quote_id}`. | Opt-in Write |
+| `send_invoice` | Send an existing invoice by email with template formatting via `POST /v1/api/factuur/mail`. | Opt-in Write |
 
 ## Result behavior
 
