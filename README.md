@@ -196,23 +196,25 @@ Rather than storing your API secret token in plaintext in `.env` files, use your
 
 ```powershell
 # Store REST API token securely in Windows Credential Manager
-python -c "import keyring; keyring.set_password('eboekhouden_mcp', 'secret_token', 'your-secret-api-token-here')"
+eboekhouden-mcp --set-secret-token "your-secret-api-token-here"
 
-# Optional: Store Web Session token for bank import grid & archive attachment linking
-python -c "import keyring; keyring.set_password('eboekhouden_mcp', 'web_session_token', 'your-web-session-token-here')"
+# Optional: Store Web Session login credentials for automatic 5-day JWT renewal
+eboekhouden-mcp --set-web-credentials "your-username" "your-password"
+eboekhouden-mcp --refresh-web-token
 ```
 
 ### macOS Keychain
 
 ```bash
-# Store REST API token securely in macOS Keychain
-python3 -c "import keyring; keyring.set_password('eboekhouden_mcp', 'secret_token', 'your-secret-api-token-here')"
+# Store REST API token securely in macOS Keychain (with non-prompting -A ACL)
+eboekhouden-mcp --set-secret-token "your-secret-api-token-here"
 
-# Optional: Store Web Session token for bank import grid & archive attachment linking
-python3 -c "import keyring; keyring.set_password('eboekhouden_mcp', 'web_session_token', 'your-web-session-token-here')"
+# Optional: Store Web Session login credentials for automatic 5-day JWT renewal
+eboekhouden-mcp --set-web-credentials "your-username" "your-password"
+eboekhouden-mcp --refresh-web-token
 ```
 
-When configured, the MCP server automatically resolves the token on startup without requiring `EBOEKHOUDEN_MCP_SECRET_TOKEN` in the environment.
+When `web_username` and `web_password` are stored in Keyring, `WebSessionClient` automatically logs in via `POST /v1/api/auth/login` whenever a session token is missing or expires (`HTTP 401` / `SECURITY_010`), persists the fresh `web_session_token` back to Keyring, and retries the request transparently.
 
 ---
 
@@ -227,7 +229,10 @@ Settings are configured via environment variables or a `.env` file in the workin
 | `EBOEKHOUDEN_MCP_REQUIRE_BIOMETRIC` | No | `true` | Enforce native Windows Hello / Touch ID biometric challenge on writes |
 | `EBOEKHOUDEN_MCP_KEYRING_SERVICE` | No | `eboekhouden_mcp` | Service name used for OS Keyring lookup |
 | `EBOEKHOUDEN_MCP_ENABLE_WEB_SESSION` | No | `false` | Enable web session bridge tools (bank import grid, attachment linking) |
-| `EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN` | No | — | Session authentication token for web session endpoints |
+| `EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN` | No | — | Session authentication token for web session endpoints (or auto-managed via Keyring) |
+| `EBOEKHOUDEN_MCP_WEB_USERNAME` | No | — | Web login username for automatic session renewal (*Optional if stored in Keyring as `web_username`) |
+| `EBOEKHOUDEN_MCP_WEB_PASSWORD` | No | — | Web login password for automatic session renewal (*Optional if stored in Keyring as `web_password`) |
+| `EBOEKHOUDEN_MCP_WEB_TOTP_SECRET` | No | — | Optional Base32 TOTP secret if 2FA is enabled (*Optional if stored in Keyring as `web_totp_secret`) |
 | `EBOEKHOUDEN_MCP_WEB_SESSION_BASE_URL` | No | `https://secure20.e-boekhouden.nl` | Base URL for internal web session requests |
 | `EBOEKHOUDEN_MCP_API_URL` | No | `https://api.e-boekhouden.nl/` | Official e-Boekhouden REST API endpoint |
 | `EBOEKHOUDEN_MCP_ALLOW_CUSTOM_API_URL` | No | `false` | Restrict connections strictly to official API host unless set to `true` |
@@ -372,7 +377,7 @@ eboekhouden-mcp --check-config
 pytest --cov
 ```
 
-All 182 unit and integration tests run fully mocked without contacting live API endpoints or requiring production secrets.
+All 183 unit and integration tests run fully mocked without contacting live API endpoints or requiring production secrets.
 
 ---
 

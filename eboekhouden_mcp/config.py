@@ -114,7 +114,13 @@ def migrate_macos_keychain_acl(
     import keyring
 
     migrated: list[str] = []
-    for account in ("secret_token", "web_session_token"):
+    for account in (
+        "secret_token",
+        "web_session_token",
+        "web_username",
+        "web_password",
+        "web_totp_secret",
+    ):
         val = keyring.get_password(service_name, account)
         if val and val.strip():
             set_keyring_secret(service_name, account, val.strip())
@@ -164,6 +170,18 @@ class MCPConfig(BaseSettings):
         default=None,
         validation_alias="EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN",
     )
+    web_username: str | None = Field(
+        default=None,
+        validation_alias="EBOEKHOUDEN_MCP_WEB_USERNAME",
+    )
+    web_password: SecretStr | None = Field(
+        default=None,
+        validation_alias="EBOEKHOUDEN_MCP_WEB_PASSWORD",
+    )
+    web_totp_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias="EBOEKHOUDEN_MCP_WEB_TOTP_SECRET",
+    )
     web_session_base_url: str = Field(
         default="https://secure20.e-boekhouden.nl",
         validation_alias="EBOEKHOUDEN_MCP_WEB_SESSION_BASE_URL",
@@ -194,19 +212,53 @@ class MCPConfig(BaseSettings):
             or d.get("EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN")
             or os.environ.get("EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN")
         )
+        web_user = (
+            d.get("web_username")
+            or d.get("EBOEKHOUDEN_MCP_WEB_USERNAME")
+            or os.environ.get("EBOEKHOUDEN_MCP_WEB_USERNAME")
+        )
+        web_pass = (
+            d.get("web_password")
+            or d.get("EBOEKHOUDEN_MCP_WEB_PASSWORD")
+            or os.environ.get("EBOEKHOUDEN_MCP_WEB_PASSWORD")
+        )
+        web_totp = (
+            d.get("web_totp_secret")
+            or d.get("EBOEKHOUDEN_MCP_WEB_TOTP_SECRET")
+            or os.environ.get("EBOEKHOUDEN_MCP_WEB_TOTP_SECRET")
+        )
 
-        if token is None or (web_enabled and not web_token):
+        if token is None or web_enabled:
             try:
                 if token is None:
                     keyring_token = get_keyring_secret(service_name, "secret_token")
                     if keyring_token:
                         d["secret_token"] = keyring_token
-                if web_enabled and not web_token:
-                    keyring_web_token = get_keyring_secret(
-                        service_name, "web_session_token"
-                    )
-                    if keyring_web_token:
-                        d["web_session_token"] = keyring_web_token
+                if web_enabled:
+                    if not web_token:
+                        keyring_web_token = get_keyring_secret(
+                            service_name, "web_session_token"
+                        )
+                        if keyring_web_token:
+                            d["web_session_token"] = keyring_web_token
+                    if not web_user:
+                        keyring_web_user = get_keyring_secret(
+                            service_name, "web_username"
+                        )
+                        if keyring_web_user:
+                            d["web_username"] = keyring_web_user
+                    if not web_pass:
+                        keyring_web_pass = get_keyring_secret(
+                            service_name, "web_password"
+                        )
+                        if keyring_web_pass:
+                            d["web_password"] = keyring_web_pass
+                    if not web_totp:
+                        keyring_web_totp = get_keyring_secret(
+                            service_name, "web_totp_secret"
+                        )
+                        if keyring_web_totp:
+                            d["web_totp_secret"] = keyring_web_totp
             except Exception:  # nosec B110
                 pass
         return d

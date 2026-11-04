@@ -37,13 +37,39 @@ def _lookup_live_web_token() -> str:
     return token.strip() if token else ""
 
 
+def _lookup_live_web_credentials() -> tuple[str, str, str]:
+    """Read the freshest web login credentials (username, password, totp_secret) from env or keyring."""
+    username = os.environ.get("EBOEKHOUDEN_MCP_WEB_USERNAME") or os.environ.get(
+        "EBOEKHOUDEN_WEB_USERNAME", ""
+    )
+    password = os.environ.get("EBOEKHOUDEN_MCP_WEB_PASSWORD") or os.environ.get(
+        "EBOEKHOUDEN_WEB_PASSWORD", ""
+    )
+    totp_secret = os.environ.get("EBOEKHOUDEN_MCP_WEB_TOTP_SECRET") or os.environ.get(
+        "EBOEKHOUDEN_WEB_TOTP_SECRET", ""
+    )
+    service_name = os.environ.get("EBOEKHOUDEN_MCP_KEYRING_SERVICE", "eboekhouden_mcp")
+    try:
+        from eboekhouden_mcp.config import get_keyring_secret
+
+        if not username:
+            username = get_keyring_secret(service_name, "web_username") or ""
+        if not password:
+            password = get_keyring_secret(service_name, "web_password") or ""
+        if not totp_secret:
+            totp_secret = get_keyring_secret(service_name, "web_totp_secret") or ""
+    except Exception:  # nosec B110
+        pass
+    return username.strip(), password.strip(), totp_secret.strip()
+
+
 def _resolve_web_client(
     client_override: WebSessionClient | None = None,
 ) -> WebSessionClient:
     """Resolve an active WebSessionClient using injection, environment, or keyring."""
     if client_override is not None:
         # If this is a live production client (no custom test transport injected),
-        # refresh its token from keyring/env in case the user rotated web_session_token.
+        # refresh its token and credentials from keyring/env in case the user rotated them.
         if (
             isinstance(client_override, WebSessionClient)
             and getattr(client_override, "_http", True) is None
@@ -52,18 +78,36 @@ def _resolve_web_client(
             live_token = _lookup_live_web_token()
             if live_token and live_token != client_override.auth_token:
                 client_override.set_token(live_token)
+            live_user, live_pass, live_totp = _lookup_live_web_credentials()
+            if live_user or live_pass or live_totp:
+                client_override.set_credentials(
+                    username=live_user or None,
+                    password=live_pass or None,
+                    totp_secret=live_totp or None,
+                )
         return client_override
 
     token = _lookup_live_web_token()
+    username, password, totp_secret = _lookup_live_web_credentials()
+    service_name = os.environ.get("EBOEKHOUDEN_MCP_KEYRING_SERVICE", "eboekhouden_mcp")
     base_url = os.environ.get(
         "EBOEKHOUDEN_MCP_WEB_SESSION_BASE_URL", "https://secure20.e-boekhouden.nl"
     )
-    if not token:
+    if not token and not (username and password):
         raise ValueError(
-            "Web session token is not configured. Set EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN "
-            "or store web_session_token in keyring (service 'eboekhouden_mcp')."
+            "Web session token or login credentials are not configured. "
+            "Set EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN or store web_username and web_password "
+            "in keyring (service 'eboekhouden_mcp')."
         )
-    return WebSessionClient(auth_token=token, base_url=base_url)
+    return WebSessionClient(
+        auth_token=token,
+        base_url=base_url,
+        username=username,
+        password=password,
+        totp_secret=totp_secret,
+        keyring_service_name=service_name,
+        persist_to_keyring=bool(username and password),
+    )
 
 
 class GetUnprocessedBankTransactionsInput(ToolSchema):

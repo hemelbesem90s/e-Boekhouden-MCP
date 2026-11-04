@@ -5,12 +5,39 @@ from __future__ import annotations
 import base64
 import copy
 import datetime as dt
+import hashlib
+import hmac
 import secrets
+import struct
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+
+
+def generate_totp_code(
+    secret: str,
+    *,
+    timestamp: float | None = None,
+    time_step: int = 30,
+    digits: int = 6,
+) -> str:
+    """Generate a 6-digit RFC 6238 TOTP code from a Base32 secret."""
+    normalized = "".join(secret.strip().split()).upper().rstrip("=")
+    if not normalized:
+        raise ValueError("TOTP secret must not be empty")
+    padding = "=" * (-len(normalized) % 8)
+    key = base64.b32decode(normalized + padding, casefold=True)
+    counter = int((timestamp if timestamp is not None else time.time()) // time_step)
+    msg = struct.pack(">Q", counter)
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code_int = (struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF) % (
+        10**digits
+    )
+    return str(code_int).zfill(digits)
 
 
 REVERSE_CHARGE_BTW_CODES = frozenset({"BI_EU_INK", "BU_EU_INK", "VERL_INK"})
@@ -502,6 +529,95 @@ def build_quote_line_payload(
     return payload
 
 
+class _SyncAutoAuthClient:
+    """Thin sync wrapper around httpx.Client that auto-authenticates on SessionExpiredError."""
+
+    def __init__(self, owner: "WebSessionClient", inner: httpx.Client) -> None:
+        self._owner = owner
+        self._inner = inner
+
+    def _call(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        if not self._owner.auth_token and self._owner.has_login_credentials():
+            self._owner.login(persist_to_keyring=self._owner.persist_to_keyring)
+        kwargs["headers"] = self._owner._get_headers()
+        resp = getattr(self._inner, method)(url, **kwargs)
+        if (
+            self._owner._is_session_expired_response(resp)
+            and self._owner.has_login_credentials()
+        ):
+            self._owner.login(persist_to_keyring=self._owner.persist_to_keyring)
+            kwargs["headers"] = self._owner._get_headers()
+            resp = getattr(self._inner, method)(url, **kwargs)
+        return resp
+
+    def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self._call("get", url, **kwargs)
+
+    def post(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self._call("post", url, **kwargs)
+
+    def put(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self._call("put", url, **kwargs)
+
+    def delete(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self._call("delete", url, **kwargs)
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+class _AsyncAutoAuthClient:
+    """Thin async wrapper around httpx.AsyncClient that auto-authenticates on SessionExpiredError."""
+
+    def __init__(
+        self,
+        owner: "WebSessionClient",
+        inner: httpx.AsyncClient,
+        *,
+        close_on_exit: bool,
+    ) -> None:
+        self._owner = owner
+        self._inner = inner
+        self._close_on_exit = close_on_exit
+
+    async def __aenter__(self) -> "_AsyncAutoAuthClient":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self._close_on_exit:
+            await self._inner.aclose()
+
+    async def _call(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        if not self._owner.auth_token and self._owner.has_login_credentials():
+            await self._owner.async_login(
+                persist_to_keyring=self._owner.persist_to_keyring
+            )
+        kwargs["headers"] = self._owner._get_headers()
+        resp = await getattr(self._inner, method)(url, **kwargs)
+        if (
+            self._owner._is_session_expired_response(resp)
+            and self._owner.has_login_credentials()
+        ):
+            await self._owner.async_login(
+                persist_to_keyring=self._owner.persist_to_keyring
+            )
+            kwargs["headers"] = self._owner._get_headers()
+            resp = await getattr(self._inner, method)(url, **kwargs)
+        return resp
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        return await self._call("get", url, **kwargs)
+
+    async def post(self, url: str, **kwargs: Any) -> httpx.Response:
+        return await self._call("post", url, **kwargs)
+
+    async def put(self, url: str, **kwargs: Any) -> httpx.Response:
+        return await self._call("put", url, **kwargs)
+
+    async def delete(self, url: str, **kwargs: Any) -> httpx.Response:
+        return await self._call("delete", url, **kwargs)
+
+
 class WebSessionClient:
     """Client for e-Boekhouden web session API (secure20 / secure)."""
 
@@ -512,16 +628,189 @@ class WebSessionClient:
         timeout: float = 30.0,
         http_client: httpx.Client | None = None,
         async_http_client: httpx.AsyncClient | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        totp_secret: str | None = None,
+        keyring_service_name: str = "eboekhouden_mcp",
+        persist_to_keyring: bool = False,
     ) -> None:
         self.auth_token = auth_token.strip() if auth_token else ""
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._http = http_client
         self._async_http = async_http_client
+        self.username = username.strip() if username else ""
+        self.password = password.strip() if password else ""
+        self.totp_secret = totp_secret.strip() if totp_secret else ""
+        self.keyring_service_name = keyring_service_name
+        self.persist_to_keyring = persist_to_keyring
 
     def set_token(self, token: str) -> None:
         """Update the web session auth token."""
         self.auth_token = token.strip()
+
+    def set_credentials(
+        self,
+        username: str | None = None,
+        password: str | None = None,
+        totp_secret: str | None = None,
+    ) -> None:
+        """Update the web session login credentials used for automatic token refresh."""
+        if username is not None:
+            self.username = username.strip()
+        if password is not None:
+            self.password = password.strip()
+        if totp_secret is not None:
+            self.totp_secret = totp_secret.strip()
+
+    def has_login_credentials(self) -> bool:
+        """Return True if both username and password are available for auto-login."""
+        return bool(self.username and self.password)
+
+    def _build_login_payload(
+        self,
+        username: str | None = None,
+        password: str | None = None,
+        two_factor_code: str | None = None,
+    ) -> dict[str, str]:
+        resolved_user = (username if username is not None else self.username).strip()
+        resolved_pass = (password if password is not None else self.password).strip()
+        if not resolved_user or not resolved_pass:
+            raise WebSessionError(
+                "Web session login requires both username and password. "
+                "Store them in keyring via --set-web-credentials or set "
+                "EBOEKHOUDEN_MCP_WEB_USERNAME and EBOEKHOUDEN_MCP_WEB_PASSWORD."
+            )
+        resolved_code = ""
+        if two_factor_code is not None:
+            resolved_code = two_factor_code.strip()
+        elif self.totp_secret:
+            resolved_code = generate_totp_code(self.totp_secret)
+        return {
+            "username": resolved_user,
+            "password": resolved_pass,
+            "twoFactorCode": resolved_code,
+        }
+
+    def _parse_login_response(
+        self, response: httpx.Response, *, persist_to_keyring: bool
+    ) -> str:
+        body = response.text
+        if response.status_code not in (200, 201):
+            try:
+                err_data = response.json()
+                if isinstance(err_data, dict):
+                    if err_data.get("errorType") == "Lockout":
+                        mins = err_data.get("lockoutMinutes", "?")
+                        raise WebSessionError(
+                            f"e-Boekhouden login locked out for {mins} minute(s)."
+                        )
+                    msg = (
+                        err_data.get("message")
+                        or err_data.get("code")
+                        or err_data.get("errorType")
+                    )
+                    if msg:
+                        raise WebSessionError(f"e-Boekhouden web login failed: {msg}")
+            except WebSessionError:
+                raise
+            except Exception:  # nosec B110
+                pass
+            raise WebSessionError(
+                f"e-Boekhouden web login failed (HTTP {response.status_code}): {body[:200]}"
+            )
+
+        try:
+            data = response.json()
+        except Exception as exc:
+            raise WebSessionError(
+                f"Failed to parse login response JSON: {body[:200]}"
+            ) from exc
+
+        token = data.get("token") if isinstance(data, dict) else None
+        if not isinstance(token, str) or not token.strip():
+            raise WebSessionError(
+                "e-Boekhouden web login response did not contain a valid token."
+            )
+
+        clean_token = token.strip()
+        self.set_token(clean_token)
+        if persist_to_keyring:
+            try:
+                from eboekhouden_mcp.config import set_keyring_secret
+
+                set_keyring_secret(
+                    self.keyring_service_name, "web_session_token", clean_token
+                )
+            except Exception:  # nosec B110
+                pass
+        return clean_token
+
+    def login(
+        self,
+        username: str | None = None,
+        password: str | None = None,
+        two_factor_code: str | None = None,
+        *,
+        persist_to_keyring: bool | None = None,
+    ) -> str:
+        """Authenticate against POST /v1/api/auth/login and update self.auth_token."""
+        payload = self._build_login_payload(username, password, two_factor_code)
+        should_persist = (
+            self.persist_to_keyring
+            if persist_to_keyring is None
+            else bool(persist_to_keyring)
+        )
+        url = f"{self.base_url}/v1/api/auth/login"
+        headers = {
+            k: v
+            for k, v in self._get_headers().items()
+            if k not in ("Authorization", "Cookie")
+        }
+        if self._http is not None:
+            resp = self._http.post(url, json=payload, headers=headers)
+            return self._parse_login_response(resp, persist_to_keyring=should_persist)
+
+        with httpx.Client(
+            base_url=self.base_url,
+            headers=headers,
+            timeout=self.timeout,
+        ) as client:
+            resp = client.post(url, json=payload)
+            return self._parse_login_response(resp, persist_to_keyring=should_persist)
+
+    async def async_login(
+        self,
+        username: str | None = None,
+        password: str | None = None,
+        two_factor_code: str | None = None,
+        *,
+        persist_to_keyring: bool | None = None,
+    ) -> str:
+        """Async version of login against POST /v1/api/auth/login."""
+        payload = self._build_login_payload(username, password, two_factor_code)
+        should_persist = (
+            self.persist_to_keyring
+            if persist_to_keyring is None
+            else bool(persist_to_keyring)
+        )
+        url = f"{self.base_url}/v1/api/auth/login"
+        headers = {
+            k: v
+            for k, v in self._get_headers().items()
+            if k not in ("Authorization", "Cookie")
+        }
+        if self._async_http is not None:
+            resp = await self._async_http.post(url, json=payload, headers=headers)
+            return self._parse_login_response(resp, persist_to_keyring=should_persist)
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=headers,
+            timeout=self.timeout,
+        ) as client:
+            resp = await client.post(url, json=payload)
+            return self._parse_login_response(resp, persist_to_keyring=should_persist)
 
     def _get_headers(self) -> dict[str, str]:
         headers = {
@@ -539,6 +828,27 @@ class WebSessionClient:
             headers["Authorization"] = self.auth_token
             headers["Cookie"] = f"auth-token={self.auth_token}"
         return headers
+
+    @staticmethod
+    def _is_session_expired_response(response: httpx.Response) -> bool:
+        """Return True if an HTTP response indicates an expired or unauthenticated session."""
+        if response.status_code == 401:
+            return True
+        body = response.text
+        if (
+            "SECURITY_010" in body
+            or "Niet ingelogd" in body
+            or '"errorType":"security"' in body
+        ):
+            return True
+        if response.status_code in (200, 201) and body.strip():
+            try:
+                data = response.json()
+                if isinstance(data, dict) and data.get("errorType") == "security":
+                    return True
+            except Exception:  # nosec B110
+                pass
+        return False
 
     def _check_response(self, response: httpx.Response) -> Any:
         """Validate response status and detect session expiration or upstream error envelopes."""
@@ -586,14 +896,25 @@ class WebSessionClient:
 
     # ---------------- Sync Methods ---------------- #
 
-    def _get_sync_client(self) -> httpx.Client:
+    def _get_sync_client(self) -> httpx.Client | _SyncAutoAuthClient:
         if self._http is not None:
-            return self._http
-        return httpx.Client(
+            return _SyncAutoAuthClient(self, self._http)
+        raw_client = httpx.Client(
             base_url=self.base_url,
             headers=self._get_headers(),
             timeout=self.timeout,
         )
+        return _SyncAutoAuthClient(self, raw_client)
+
+    def _get_async_client(self) -> _AsyncAutoAuthClient:
+        if self._async_http is not None:
+            return _AsyncAutoAuthClient(self, self._async_http, close_on_exit=False)
+        raw_client = httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=self.timeout,
+        )
+        return _AsyncAutoAuthClient(self, raw_client, close_on_exit=True)
 
     def get_import_grid(self, offset: int = 0, limit: int = 50) -> dict[str, Any]:
         """Fetch unprocessed bank statement rows from /v1/api/import/gridtable.
@@ -1613,20 +1934,7 @@ class WebSessionClient:
     ) -> dict[str, Any]:
         """Async version of get_import_grid."""
         url = f"{self.base_url}/v1/api/import/gridtable?offset={offset}&limit={limit}&orderBy=&sortDirection=1"
-        if self._async_http is not None:
-            resp = await self._async_http.get(url, headers=self._get_headers())
-            raw = self._check_response(resp)
-            return {
-                "rowCount": raw.get("rowCount", 0),
-                "rows": parse_import_grid(raw),
-                "raw": raw,
-            }
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.get(url)
             raw = self._check_response(resp)
             return {
@@ -1641,15 +1949,7 @@ class WebSessionClient:
         """Async version of get_mutatie_by_afschrift."""
         query_str = urlencode({k: str(v) for k, v in params.items()})
         url = f"{self.base_url}/v1/api/mutatie/getmutatiebyafschrift?{query_str}"
-        if self._async_http is not None:
-            resp = await self._async_http.get(url, headers=self._get_headers())
-            return self._check_response(resp)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.get(url)
             return self._check_response(resp)
 
@@ -1663,32 +1963,14 @@ class WebSessionClient:
             "folders": [{"id": file_id, "soort": "F"}],
             "koppelType": "MUT",
         }
-        if self._async_http is not None:
-            resp = await self._async_http.post(
-                url, json=payload, headers=self._get_headers()
-            )
-            return self._check_response(resp)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.post(url, json=payload)
             return self._check_response(resp)
 
     async def async_get_archive_folders(self) -> Any:
         """Async version of get_archive_folders."""
         url = f"{self.base_url}/v1/api/folder/directory"
-        if self._async_http is not None:
-            resp = await self._async_http.get(url, headers=self._get_headers())
-            return self._check_response(resp)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.get(url)
             return self._check_response(resp)
 
@@ -1698,45 +1980,21 @@ class WebSessionClient:
         """Async version of get_archive_files."""
         inc_del = str(include_deleted).lower()
         url = f"{self.base_url}/v1/api/folder/{folder_id}/filelist?includeDelete={inc_del}"
-        if self._async_http is not None:
-            resp = await self._async_http.get(url, headers=self._get_headers())
-            return self._check_response(resp)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.get(url)
             return self._check_response(resp)
 
     async def async_get_recognized_invoice_model(self, file_id: int) -> Any:
         """Async version of get_recognized_invoice_model."""
         url = f"{self.base_url}/v1/api/mutatie/folder/{file_id}/model"
-        if self._async_http is not None:
-            resp = await self._async_http.get(url, headers=self._get_headers())
-            return self._check_response(resp)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.get(url)
             return self._check_response(resp)
 
     async def async_get_mutation_model_by_number(self, mutation_number: int) -> Any:
         """Async version of get_mutation_model_by_number."""
         url = f"{self.base_url}/v1/api/mutatie/nr/{mutation_number}/model"
-        if self._async_http is not None:
-            resp = await self._async_http.get(url, headers=self._get_headers())
-            return self._check_response(resp)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.get(url)
             return self._check_response(resp)
 
@@ -1745,22 +2003,7 @@ class WebSessionClient:
         url = f"{self.base_url}/v1/api/mutatie"
         is_update = bool(payload.get("mutatie", {}).get("nr"))
         normalized = normalize_web_mutation_payload(payload, is_update=is_update)
-        if self._async_http is not None:
-            if is_update:
-                resp = await self._async_http.put(
-                    url, json=normalized, headers=self._get_headers()
-                )
-            else:
-                resp = await self._async_http.post(
-                    url, json=normalized, headers=self._get_headers()
-                )
-            return self._check_response(resp)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             if is_update:
                 resp = await client.put(url, json=normalized)
             else:
@@ -1772,17 +2015,7 @@ class WebSessionClient:
     ) -> Any:
         """Async version of move_archive_files."""
         url = f"{self.base_url}/v1/api/folder/bulk/update/{target_folder_id}"
-        if self._async_http is not None:
-            resp = await self._async_http.post(
-                url, json=file_ids, headers=self._get_headers()
-            )
-            return self._check_response(resp)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.post(url, json=file_ids)
             return self._check_response(resp)
 
@@ -1792,17 +2025,7 @@ class WebSessionClient:
         """Async version of create_archive_folder."""
         url = f"{self.base_url}/v1/api/folder/directory"
         payload = {"parentFolderId": parent_folder_id, "name": name}
-        if self._async_http is not None:
-            resp = await self._async_http.post(
-                url, json=payload, headers=self._get_headers()
-            )
-            return self._check_response(resp)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.post(url, json=payload)
             return self._check_response(resp)
 
@@ -1824,17 +2047,7 @@ class WebSessionClient:
             "overwrite": overwrite,
             "folderId": folder_id,
         }
-        if self._async_http is not None:
-            resp = await self._async_http.post(
-                url, json=payload, headers=self._get_headers()
-            )
-            return self._check_response(resp)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.post(url, json=payload)
             return self._check_response(resp)
 
@@ -1845,16 +2058,11 @@ class WebSessionClient:
         grid_url = f"{self.base_url}/v1/api/mutatie/gridtable"
         del_url = f"{self.base_url}/v1/api/mutatie/bulk/delete"
 
-        async def _execute_delete(
-            client_obj: httpx.AsyncClient, use_headers: bool
-        ) -> dict[str, Any]:
-            hdrs = self._get_headers() if use_headers else None
+        async with self._get_async_client() as client:
             internal_ids: list[int] = []
             resolved_map: dict[int, int] = {}
             for nr in mutation_numbers:
-                resp = await client_obj.post(
-                    grid_url, json={"filter": {"nr": str(nr)}}, headers=hdrs
-                )
+                resp = await client.post(grid_url, json={"filter": {"nr": str(nr)}})
                 grid_data = self._check_response(resp)
                 rows = grid_data.get("data", []) if isinstance(grid_data, dict) else []
                 for row in rows:
@@ -1870,23 +2078,13 @@ class WebSessionClient:
                 raise WebSessionError(
                     f"No matching internal mutation IDs found for mutation_numbers={mutation_numbers}"
                 )
-            del_resp = await client_obj.post(del_url, json=internal_ids, headers=hdrs)
+            del_resp = await client.post(del_url, json=internal_ids)
             del_result = self._check_response(del_resp)
             return {
                 "mutation_numbers": mutation_numbers,
                 "resolved_ids": resolved_map,
                 "response": del_result,
             }
-
-        if self._async_http is not None:
-            return await _execute_delete(self._async_http, use_headers=True)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
-            return await _execute_delete(client, use_headers=False)
 
     async def async_get_time_projects(
         self, active_only: bool = False
@@ -1896,15 +2094,12 @@ class WebSessionClient:
         getall_url = f"{self.base_url}/v1/api/project/getall/{active_flag}"
         grid_url = f"{self.base_url}/v1/api/project/gridtable?offset=0&limit=50&orderBy=&sortDirection=1"
 
-        async def _fetch(
-            client_obj: httpx.AsyncClient, use_headers: bool
-        ) -> list[dict[str, Any]]:
-            hdrs = self._get_headers() if use_headers else None
-            resp_all = await client_obj.get(getall_url, headers=hdrs)
+        async with self._get_async_client() as client:
+            resp_all = await client.get(getall_url)
             raw_all = self._check_response(resp_all)
             projects = raw_all if isinstance(raw_all, list) else []
 
-            resp_grid = await client_obj.get(grid_url, headers=hdrs)
+            resp_grid = await client.get(grid_url)
             raw_grid = self._check_response(resp_grid)
             grid_rows = parse_gridtable_rows(raw_grid)
             rel_by_id = {
@@ -1924,32 +2119,13 @@ class WebSessionClient:
                 result.append(item)
             return result
 
-        if self._async_http is not None:
-            return await _fetch(self._async_http, use_headers=True)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
-            return await _fetch(client, use_headers=False)
-
     async def async_get_time_activities(
         self, active_only: bool = False
     ) -> list[dict[str, Any]]:
         """Async version of get_time_activities."""
         active_flag = "true" if active_only else "false"
         url = f"{self.base_url}/v1/api/activiteit/getall/{active_flag}"
-        if self._async_http is not None:
-            resp = await self._async_http.get(url, headers=self._get_headers())
-            raw = self._check_response(resp)
-            return raw if isinstance(raw, list) else []
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.get(url)
             raw = self._check_response(resp)
             return raw if isinstance(raw, list) else []
@@ -1967,11 +2143,7 @@ class WebSessionClient:
         max_rows: int = 500,
     ) -> dict[str, Any]:
         """Async version of get_time_entries with automatic 50-row pagination."""
-
-        async def _fetch_entries(
-            client_obj: httpx.AsyncClient, use_headers: bool
-        ) -> tuple[int, list[dict[str, Any]]]:
-            hdrs = self._get_headers() if use_headers else None
+        async with self._get_async_client() as client:
             all_rows: list[dict[str, Any]] = []
             offset = 0
             total_row_count = 0
@@ -1988,7 +2160,7 @@ class WebSessionClient:
                     include_non_billable=include_non_billable,
                     include_notes=include_notes,
                 )
-                resp = await client_obj.get(url, headers=hdrs)
+                resp = await client.get(url)
                 raw = self._check_response(resp)
                 total_row_count = int(raw.get("rowCount", 0))
                 page_rows = parse_gridtable_rows(raw)
@@ -1998,21 +2170,6 @@ class WebSessionClient:
                 offset += len(page_rows)
                 if offset >= total_row_count or len(page_rows) < 50:
                     break
-            return total_row_count, all_rows
-
-        if self._async_http is not None:
-            total_row_count, all_rows = await _fetch_entries(
-                self._async_http, use_headers=True
-            )
-        else:
-            async with httpx.AsyncClient(
-                base_url=self.base_url,
-                headers=self._get_headers(),
-                timeout=self.timeout,
-            ) as client:
-                total_row_count, all_rows = await _fetch_entries(
-                    client, use_headers=False
-                )
 
         projects = await self.async_get_time_projects(active_only=False)
         activities = await self.async_get_time_activities(active_only=False)
@@ -2030,30 +2187,18 @@ class WebSessionClient:
 
     async def async_get_quote_metadata(self) -> dict[str, Any]:
         """Async version of get_quote_metadata."""
-
-        async def _fetch(
-            client_obj: httpx.AsyncClient, use_headers: bool
-        ) -> dict[str, Any]:
-            hdrs = self._get_headers() if use_headers else None
+        async with self._get_async_client() as client:
             statuses = self._check_response(
-                await client_obj.get(
-                    f"{self.base_url}/v1/api/offertestatus", headers=hdrs
-                )
+                await client.get(f"{self.base_url}/v1/api/offertestatus")
             )
             templates = self._check_response(
-                await client_obj.get(
-                    f"{self.base_url}/v1/api/offertesjabloon/selectlist", headers=hdrs
-                )
+                await client.get(f"{self.base_url}/v1/api/offertesjabloon/selectlist")
             )
             users = self._check_response(
-                await client_obj.get(
-                    f"{self.base_url}/v1/api/user/selectlist", headers=hdrs
-                )
+                await client.get(f"{self.base_url}/v1/api/user/selectlist")
             )
             next_nr = self._check_response(
-                await client_obj.get(
-                    f"{self.base_url}/v1/api/offerte/nummer/next", headers=hdrs
-                )
+                await client.get(f"{self.base_url}/v1/api/offerte/nummer/next")
             )
             return {
                 "statuses": statuses if isinstance(statuses, list) else [],
@@ -2061,16 +2206,6 @@ class WebSessionClient:
                 "users": users if isinstance(users, list) else [],
                 "next_quote_number": str(next_nr) if next_nr is not None else "",
             }
-
-        if self._async_http is not None:
-            return await _fetch(self._async_http, use_headers=True)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
-            return await _fetch(client, use_headers=False)
 
     async def async_list_quotes(
         self,
@@ -2100,17 +2235,9 @@ class WebSessionClient:
             expiration_from=expiration_from,
             expiration_to=expiration_to,
         )
-        if self._async_http is not None:
-            resp = await self._async_http.get(url, headers=self._get_headers())
+        async with self._get_async_client() as client:
+            resp = await client.get(url)
             raw = self._check_response(resp)
-        else:
-            async with httpx.AsyncClient(
-                base_url=self.base_url,
-                headers=self._get_headers(),
-                timeout=self.timeout,
-            ) as client:
-                resp = await client.get(url)
-                raw = self._check_response(resp)
 
         rows = parse_gridtable_rows(raw)
         total_excl = round(sum(float(r.get("totaalExcl") or 0.0) for r in rows), 2)
@@ -2159,34 +2286,25 @@ class WebSessionClient:
 
         qid = int(resolved_id)
 
-        async def _fetch(
-            client_obj: httpx.AsyncClient, use_headers: bool
-        ) -> dict[str, Any]:
-            hdrs = self._get_headers() if use_headers else None
+        async with self._get_async_client() as client:
             model = self._check_response(
-                await client_obj.get(
-                    f"{self.base_url}/v1/api/offerte/{qid}", headers=hdrs
-                )
+                await client.get(f"{self.base_url}/v1/api/offerte/{qid}")
             )
             dashboard = self._check_response(
-                await client_obj.get(
-                    f"{self.base_url}/v1/api/offerte/dashboard/{qid}", headers=hdrs
-                )
+                await client.get(f"{self.base_url}/v1/api/offerte/dashboard/{qid}")
             )
             in_ex = str((model or {}).get("inEx") or "EX").upper()
             is_incl_str = "true" if in_ex == "IN" else "false"
             regels_raw = self._check_response(
-                await client_obj.get(
+                await client.get(
                     f"{self.base_url}/v1/api/offerteregel/gridtable/{qid}"
-                    f"?isInclBtw={is_incl_str}&addArtikelVoorraad=false",
-                    headers=hdrs,
+                    f"?isInclBtw={is_incl_str}&addArtikelVoorraad=false"
                 )
             )
             files_raw = self._check_response(
-                await client_obj.get(
+                await client.get(
                     f"{self.base_url}/v1/api/folder/gekoppeldgridtable"
-                    f"?offset=0&limit=50&orderBy=&sortDirection=1&koppelId={qid}&koppelSoort=OF",
-                    headers=hdrs,
+                    f"?offset=0&limit=50&orderBy=&sortDirection=1&koppelId={qid}&koppelSoort=OF"
                 )
             )
             items = parse_gridtable_rows(regels_raw)
@@ -2221,16 +2339,6 @@ class WebSessionClient:
                 "dashboard": dashboard,
             }
 
-        if self._async_http is not None:
-            return await _fetch(self._async_http, use_headers=True)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
-            return await _fetch(client, use_headers=False)
-
     async def async_link_file_to_quote(
         self, quote_id: int, file_id: int
     ) -> dict[str, Any]:
@@ -2241,17 +2349,7 @@ class WebSessionClient:
             "folders": [{"id": int(file_id), "soort": "F"}],
             "koppelType": "OF",
         }
-        if self._async_http is not None:
-            resp = await self._async_http.post(
-                url, json=payload, headers=self._get_headers()
-            )
-            return self._check_response(resp)
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.post(url, json=payload)
             return self._check_response(resp)
 
@@ -2331,15 +2429,11 @@ class WebSessionClient:
             "inEx": norm_in_ex,
         }
 
-        async def _execute_create(
-            client_obj: httpx.AsyncClient, use_headers: bool
-        ) -> int:
-            hdrs = self._get_headers() if use_headers else None
+        async with self._get_async_client() as client:
             create_resp = self._check_response(
-                await client_obj.post(
+                await client.post(
                     f"{self.base_url}/v1/api/offerte",
                     json=header_payload,
-                    headers=hdrs,
                 )
             )
             created_id = int(
@@ -2358,9 +2452,8 @@ class WebSessionClient:
                 ledgers: list[dict[str, Any]] = []
                 if need_ledgers:
                     gbr_resp = self._check_response(
-                        await client_obj.get(
-                            f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL",
-                            headers=hdrs,
+                        await client.get(
+                            f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL"
                         )
                     )
                     if isinstance(gbr_resp, list):
@@ -2375,23 +2468,11 @@ class WebSessionClient:
                         ledgers=ledgers,
                     )
                     self._check_response(
-                        await client_obj.post(
+                        await client.post(
                             f"{self.base_url}/v1/api/offerteregel",
                             json=line_payload,
-                            headers=hdrs,
                         )
                     )
-            return created_id
-
-        if self._async_http is not None:
-            created_id = await _execute_create(self._async_http, use_headers=True)
-        else:
-            async with httpx.AsyncClient(
-                base_url=self.base_url,
-                headers=self._get_headers(),
-                timeout=self.timeout,
-            ) as client:
-                created_id = await _execute_create(client, use_headers=False)
 
         if archive_file_id is not None:
             await self.async_link_file_to_quote(
@@ -2423,14 +2504,9 @@ class WebSessionClient:
         """Async version of update_quote."""
         qid = int(quote_id)
 
-        async def _execute_update(
-            client_obj: httpx.AsyncClient, use_headers: bool
-        ) -> None:
-            hdrs = self._get_headers() if use_headers else None
+        async with self._get_async_client() as client:
             existing = self._check_response(
-                await client_obj.get(
-                    f"{self.base_url}/v1/api/offerte/{qid}", headers=hdrs
-                )
+                await client.get(f"{self.base_url}/v1/api/offerte/{qid}")
             )
             if not isinstance(existing, dict):
                 raise WebSessionError(f"Quote {qid} not found.")
@@ -2438,9 +2514,7 @@ class WebSessionClient:
             resolved_status_id = existing.get("statusId")
             if status_id is not None or status is not None:
                 statuses = self._check_response(
-                    await client_obj.get(
-                        f"{self.base_url}/v1/api/offertestatus", headers=hdrs
-                    )
+                    await client.get(f"{self.base_url}/v1/api/offertestatus")
                 )
                 resolved_status_id = resolve_quote_status_id(
                     statuses if isinstance(statuses, list) else [],
@@ -2507,20 +2581,18 @@ class WebSessionClient:
             }
 
             self._check_response(
-                await client_obj.put(
+                await client.put(
                     f"{self.base_url}/v1/api/offerte",
                     json=update_payload,
-                    headers=hdrs,
                 )
             )
 
             if items is not None:
                 is_incl_str = "true" if norm_in_ex == "IN" else "false"
                 regels_raw = self._check_response(
-                    await client_obj.get(
+                    await client.get(
                         f"{self.base_url}/v1/api/offerteregel/gridtable/{qid}"
-                        f"?isInclBtw={is_incl_str}&addArtikelVoorraad=false",
-                        headers=hdrs,
+                        f"?isInclBtw={is_incl_str}&addArtikelVoorraad=false"
                     )
                 )
                 existing_rows = parse_gridtable_rows(regels_raw)
@@ -2529,9 +2601,8 @@ class WebSessionClient:
                     for row in existing_rows:
                         if row.get("id") is not None:
                             self._check_response(
-                                await client_obj.delete(
-                                    f"{self.base_url}/v1/api/offerteregel/{int(row['id'])}",
-                                    headers=hdrs,
+                                await client.delete(
+                                    f"{self.base_url}/v1/api/offerteregel/{int(row['id'])}"
                                 )
                             )
                     start_volgorde = 1
@@ -2546,9 +2617,8 @@ class WebSessionClient:
                     ledgers: list[dict[str, Any]] = []
                     if need_ledgers:
                         gbr_resp = self._check_response(
-                            await client_obj.get(
-                                f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL",
-                                headers=hdrs,
+                            await client.get(
+                                f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL"
                             )
                         )
                         if isinstance(gbr_resp, list):
@@ -2563,22 +2633,11 @@ class WebSessionClient:
                             ledgers=ledgers,
                         )
                         self._check_response(
-                            await client_obj.post(
+                            await client.post(
                                 f"{self.base_url}/v1/api/offerteregel",
                                 json=line_payload,
-                                headers=hdrs,
                             )
                         )
-
-        if self._async_http is not None:
-            await _execute_update(self._async_http, use_headers=True)
-        else:
-            async with httpx.AsyncClient(
-                base_url=self.base_url,
-                headers=self._get_headers(),
-                timeout=self.timeout,
-            ) as client:
-                await _execute_update(client, use_headers=False)
 
         if archive_file_id is not None:
             await self.async_link_file_to_quote(
@@ -2591,20 +2650,7 @@ class WebSessionClient:
         """Async version of delete_quote."""
         qid = int(quote_id)
         url = f"{self.base_url}/v1/api/offerte/{qid}"
-        if self._async_http is not None:
-            resp = await self._async_http.delete(url, headers=self._get_headers())
-            result = self._check_response(resp)
-            return {
-                "quote_id": qid,
-                "deleted": True,
-                "response": result,
-            }
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.delete(url)
             result = self._check_response(resp)
             return {
@@ -2622,16 +2668,7 @@ class WebSessionClient:
         else:
             url = f"{self.base_url}/v1/api/factuur/{int(invoice_id)}/maildata"
 
-        if self._async_http is not None:
-            resp = await self._async_http.get(url, headers=self._get_headers())
-            result = self._check_response(resp)
-            return result if isinstance(result, dict) else {}
-
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self._get_headers(),
-            timeout=self.timeout,
-        ) as client:
+        async with self._get_async_client() as client:
             resp = await client.get(url)
             result = self._check_response(resp)
             return result if isinstance(result, dict) else {}
@@ -2708,19 +2745,9 @@ class WebSessionClient:
         }
 
         url = f"{self.base_url}/v1/api/factuur/mail"
-        if self._async_http is not None:
-            resp = await self._async_http.post(
-                url, json=payload, headers=self._get_headers()
-            )
+        async with self._get_async_client() as client:
+            resp = await client.post(url, json=payload)
             result = self._check_response(resp)
-        else:
-            async with httpx.AsyncClient(
-                base_url=self.base_url,
-                headers=self._get_headers(),
-                timeout=self.timeout,
-            ) as client:
-                resp = await client.post(url, json=payload)
-                result = self._check_response(resp)
 
         if isinstance(result, dict):
             error_count = result.get("errorCount", 0)

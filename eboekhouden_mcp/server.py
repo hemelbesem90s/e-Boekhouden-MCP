@@ -72,12 +72,32 @@ class EBoekhoudenMCPServer:
         register_all_tools(self.registry)
 
         # Wire up web session client if enabled
-        if self.config.enable_web_session and self.config.web_session_token:
+        has_web_creds = bool(self.config.web_username and self.config.web_password)
+        if self.config.enable_web_session and (
+            self.config.web_session_token or has_web_creds
+        ):
             from eboekhouden_mcp.web_session.client import WebSessionClient
 
             web_client = WebSessionClient(
-                auth_token=self.config.web_session_token.get_secret_value(),
+                auth_token=(
+                    self.config.web_session_token.get_secret_value()
+                    if self.config.web_session_token
+                    else None
+                ),
                 base_url=self.config.web_session_base_url,
+                username=self.config.web_username,
+                password=(
+                    self.config.web_password.get_secret_value()
+                    if self.config.web_password
+                    else None
+                ),
+                totp_secret=(
+                    self.config.web_totp_secret.get_secret_value()
+                    if self.config.web_totp_secret
+                    else None
+                ),
+                keyring_service_name=self.config.keyring_service_name,
+                persist_to_keyring=has_web_creds,
             )
             for tool_name in WEB_SESSION_TOOL_NAMES:
                 registered_tool = self.registry.get(tool_name)
@@ -356,6 +376,22 @@ def main() -> None:
         metavar="TOKEN",
         help="store web_session_token in OS keyring with trusted ACL",
     )
+    parser.add_argument(
+        "--set-web-credentials",
+        nargs=2,
+        metavar=("USERNAME", "PASSWORD"),
+        help="store web_username and web_password in OS keyring for automatic web session login",
+    )
+    parser.add_argument(
+        "--set-web-totp",
+        metavar="BASE32_SECRET",
+        help="store optional web_totp_secret in OS keyring for 2FA TOTP generation",
+    )
+    parser.add_argument(
+        "--refresh-web-token",
+        action="store_true",
+        help="authenticate with stored web_username/web_password and save a fresh web_session_token in keyring",
+    )
     parser.add_argument("--version", action="version", version="%(prog)s 0.2.0")
     args = parser.parse_args()
 
@@ -368,6 +404,43 @@ def main() -> None:
         set_keyring_secret("eboekhouden_mcp", "web_session_token", args.set_web_token)
         print("Stored web_session_token in keyring.")
         return
+
+    if args.set_web_credentials:
+        username_val, password_val = args.set_web_credentials
+        set_keyring_secret("eboekhouden_mcp", "web_username", username_val)
+        set_keyring_secret("eboekhouden_mcp", "web_password", password_val)
+        print("Stored web_username and web_password in keyring.")
+        return
+
+    if args.set_web_totp:
+        set_keyring_secret("eboekhouden_mcp", "web_totp_secret", args.set_web_totp)
+        print("Stored web_totp_secret in keyring.")
+        return
+
+    if args.refresh_web_token:
+        from eboekhouden_mcp.web_session.tools import _lookup_live_web_credentials
+        from eboekhouden_mcp.web_session.client import WebSessionClient
+
+        user, pwd, totp = _lookup_live_web_credentials()
+        if not user or not pwd:
+            print(
+                "Error: web_username and web_password are not set in keyring or environment.",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        web_client = WebSessionClient(
+            username=user,
+            password=pwd,
+            totp_secret=totp or None,
+            persist_to_keyring=True,
+        )
+        try:
+            web_client.login(persist_to_keyring=True)
+            print("Authenticated and stored fresh web_session_token in keyring.")
+            return
+        except Exception as exc:
+            print(f"Web session login failed: {exc}", file=sys.stderr)
+            raise SystemExit(1) from None
 
     if args.fix_keychain_acl:
         migrated = migrate_macos_keychain_acl("eboekhouden_mcp")

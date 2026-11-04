@@ -1718,3 +1718,149 @@ async def test_send_invoice_web_session_sync_and_async():
 
     sync_http.close()
     await async_http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_web_session_auto_login_and_silent_refresh(monkeypatch):
+    """Verify cold-start auto-login, silent 401/SECURITY_010 token refresh, TOTP generation, and keyring persistence."""
+    from eboekhouden_mcp.web_session.client import generate_totp_code
+
+    # RFC 6238 test vector (Base32 of "12345678901234567890" = GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ)
+    totp_secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+    code_59 = generate_totp_code(totp_secret, timestamp=59.0)
+    assert len(code_59) == 6
+    assert code_59 == "287082"
+
+    stored_secrets: dict[tuple[str, str], str] = {}
+
+    def fake_set_keyring_secret(service: str, account: str, secret: str) -> None:
+        stored_secrets[(service, account)] = secret
+
+    monkeypatch.setattr(
+        "eboekhouden_mcp.config.set_keyring_secret", fake_set_keyring_secret
+    )
+
+    login_calls: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/v1/api/auth/login" in url and request.method == "POST":
+            body = json.loads(request.content.decode("utf-8"))
+            login_calls.append(body)
+            if body.get("password") == "wrong-pass":
+                return httpx.Response(
+                    401,
+                    json={
+                        "errorType": "validation",
+                        "message": "Gebruikersnaam en/of wachtwoord is onjuist.",
+                    },
+                )
+            if body.get("password") == "locked-pass":
+                return httpx.Response(
+                    400,
+                    json={"errorType": "Lockout", "lockoutMinutes": 15},
+                )
+            return httpx.Response(200, json={"token": "fresh-jwt-token-999"})
+
+        if "/v1/api/folder/directory" in url:
+            auth_hdr = request.headers.get("Authorization", "")
+            if auth_hdr != "fresh-jwt-token-999":
+                return httpx.Response(
+                    200,
+                    json={
+                        "errorType": "security",
+                        "message": "Niet ingelogd",
+                        "code": "SECURITY_010",
+                    },
+                )
+            return httpx.Response(200, json=[{"id": 1, "naam": "Inbox"}])
+
+        return httpx.Response(404)
+
+    # 1. Sync cold-start auto-login (no initial auth_token)
+    sync_http = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    client_cold = WebSessionClient(
+        auth_token=None,
+        username="jacob_user",
+        password="secret_password",
+        totp_secret=totp_secret,
+        http_client=sync_http,
+        persist_to_keyring=True,
+    )
+    folders = client_cold.get_archive_folders()
+    assert len(folders) == 1
+    assert client_cold.auth_token == "fresh-jwt-token-999"
+    assert len(login_calls) == 1
+    assert login_calls[0]["username"] == "jacob_user"
+    assert len(login_calls[0]["twoFactorCode"]) == 6
+    assert (
+        stored_secrets[("eboekhouden_mcp", "web_session_token")]
+        == "fresh-jwt-token-999"
+    )
+
+    # 2. Sync expired token silent refresh (starts with expired token -> hits SECURITY_010 -> logs in -> retries)
+    client_expired = WebSessionClient(
+        auth_token="expired-jwt-token",
+        username="jacob_user",
+        password="secret_password",
+        http_client=sync_http,
+        persist_to_keyring=True,
+    )
+    folders2 = client_expired.get_archive_folders()
+    assert len(folders2) == 1
+    assert client_expired.auth_token == "fresh-jwt-token-999"
+    assert len(login_calls) == 2
+
+    # 3. Async expired token silent refresh
+    async_http = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    client_async_expired = WebSessionClient(
+        auth_token="expired-async-token",
+        username="jacob_user",
+        password="secret_password",
+        async_http_client=async_http,
+        persist_to_keyring=True,
+    )
+    folders_async = await client_async_expired.async_get_archive_folders()
+    assert len(folders_async) == 1
+    assert client_async_expired.auth_token == "fresh-jwt-token-999"
+    assert len(login_calls) == 3
+
+    # 4. Login error & lockout handling
+    bad_client = WebSessionClient(
+        username="jacob_user",
+        password="wrong-pass",
+        http_client=sync_http,
+    )
+    with pytest.raises(WebSessionError, match="onjuist"):
+        bad_client.login()
+
+    locked_client = WebSessionClient(
+        username="jacob_user",
+        password="locked-pass",
+        http_client=sync_http,
+    )
+    with pytest.raises(WebSessionError, match="locked out for 15"):
+        locked_client.login()
+
+    # 5. Server wires WebSessionClient when only web_username + web_password are provided
+    cfg_creds_only = MCPConfig(
+        secret_token="rest-api-token",
+        enable_web_session=True,
+        web_username="jacob_user",
+        web_password="secret_password",
+        _env_file=None,
+    )
+    srv = EBoekhoudenMCPServer(cfg_creds_only)
+    folder_tool = srv.registry.get("list_archive_folders")
+    assert folder_tool is not None
+    assert folder_tool._web_client is not None
+    assert folder_tool._web_client.has_login_credentials() is True
+
+    sync_http.close()
+    await async_http.aclose()
