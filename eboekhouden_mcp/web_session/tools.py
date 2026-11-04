@@ -1350,8 +1350,12 @@ class SendInvoiceTool(BaseTool):
                 inv = client.invoices.get(invoice_id)
                 if inv.relation_id:
                     rel = client.relations.get(inv.relation_id)
-                    recipient_email = rel.email
-            except Exception:
+                    recipient_email = (
+                        rel.email_address_invoice
+                        or rel.email_address
+                        or getattr(rel, "email", None)
+                    )
+            except Exception:  # nosec B110
                 pass
 
         result = await web_client.async_send_invoice_email(

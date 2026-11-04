@@ -2032,7 +2032,7 @@ class WebSessionClient:
             resolved_recipient = mail_data.get("emailAan")
             if not resolved_recipient and isinstance(mail_data.get("to"), list):
                 emails = [
-                    t.get("email")
+                    str(t["email"])
                     for t in mail_data["to"]
                     if isinstance(t, dict) and t.get("email")
                 ]
@@ -2873,7 +2873,7 @@ class WebSessionClient:
             resolved_recipient = mail_data.get("emailAan")
             if not resolved_recipient and isinstance(mail_data.get("to"), list):
                 emails = [
-                    t.get("email")
+                    str(t["email"])
                     for t in mail_data["to"]
                     if isinstance(t, dict) and t.get("email")
                 ]
