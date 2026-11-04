@@ -1760,7 +1760,31 @@ async def test_web_session_auto_login_and_silent_refresh(monkeypatch):
                     400,
                     json={"errorType": "Lockout", "lockoutMinutes": 15},
                 )
+            if body.get("password") == "v1-fallback-pass":
+                return httpx.Response(
+                    500,
+                    json={
+                        "errorType": "server",
+                        "message": "Er is iets misgegaan. Foutcode: WR2RCTZ0",
+                    },
+                )
             return httpx.Response(200, json={"token": "fresh-jwt-token-999"})
+
+        if "/bh/inloggen.asp" in url and request.method == "GET":
+            return httpx.Response(
+                200,
+                headers={"Set-Cookie": "SRVRID=10s12; path=/"},
+                text='<input type="hidden" name="txtFormCheck" value="99887766">',
+            )
+
+        if "/bh/inloggen.asp?LOGIN=1" in url and request.method == "POST":
+            return httpx.Response(
+                200,
+                headers={
+                    "Set-Cookie": "auth-token=v1-cookie-jwt-token-777; Domain=.e-boekhouden.nl; Path=/; HttpOnly; Secure"
+                },
+                text="<html>Logged in</html>",
+            )
 
         if "/v1/api/folder/directory" in url:
             auth_hdr = request.headers.get("Authorization", "")
@@ -1847,6 +1871,30 @@ async def test_web_session_auto_login_and_silent_refresh(monkeypatch):
     )
     with pytest.raises(WebSessionError, match="locked out for 15"):
         locked_client.login()
+
+    # 4b. Classic V1 login flow (GET + POST /bh/inloggen.asp) when /v1/api/auth/login returns 500 WR2RCTZ0
+    v1_client = WebSessionClient(
+        username="jacob_user",
+        password="v1-fallback-pass",
+        http_client=sync_http,
+        persist_to_keyring=True,
+    )
+    minted_tok = v1_client.login()
+    assert minted_tok == "v1-cookie-jwt-token-777"
+    assert v1_client.auth_token == "v1-cookie-jwt-token-777"
+    assert (
+        stored_secrets[("eboekhouden_mcp", "web_session_token")]
+        == "v1-cookie-jwt-token-777"
+    )
+
+    v1_async_client = WebSessionClient(
+        username="jacob_user",
+        password="v1-fallback-pass",
+        async_http_client=async_http,
+        persist_to_keyring=True,
+    )
+    minted_async_tok = await v1_async_client.async_login()
+    assert minted_async_tok == "v1-cookie-jwt-token-777"
 
     # 5. Server wires WebSessionClient when only web_username + web_password are provided
     cfg_creds_only = MCPConfig(

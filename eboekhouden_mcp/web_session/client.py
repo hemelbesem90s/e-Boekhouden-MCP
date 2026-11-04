@@ -7,6 +7,7 @@ import copy
 import datetime as dt
 import hashlib
 import hmac
+import re
 import secrets
 import struct
 import time
@@ -692,9 +693,84 @@ class WebSessionClient:
             "twoFactorCode": resolved_code,
         }
 
+    def _v1_login_url(self) -> str:
+        """Resolve the classic V1 login endpoint URL (e.g. https://secure.e-boekhouden.nl/bh/inloggen.asp)."""
+        if "secure20." in self.base_url:
+            v1_base = self.base_url.replace("secure20.", "secure.")
+        elif "accept20." in self.base_url:
+            v1_base = self.base_url.replace("accept20.", "accept.")
+        else:
+            v1_base = self.base_url
+        return f"{v1_base.rstrip('/')}/bh/inloggen.asp"
+
+    @staticmethod
+    def _extract_v1_login_fields(
+        html_text: str, response: httpx.Response
+    ) -> tuple[str, str]:
+        """Extract txtFormCheck CSRF token and SRVRID cookie from GET /bh/inloggen.asp."""
+        m = re.search(
+            r'name=["\']txtFormCheck["\']\s+value=["\']([^"\']+)["\']', html_text
+        )
+        if not m:
+            m = re.search(
+                r'value=["\']([^"\']+)["\']\s+name=["\']txtFormCheck["\']', html_text
+            )
+        form_check = m.group(1) if m else ""
+        srvrid = response.cookies.get("SRVRID") or ""
+        if not srvrid:
+            for sc in response.headers.get_list("set-cookie"):
+                sm = re.search(r"SRVRID=([^;\s]+)", sc)
+                if sm:
+                    srvrid = sm.group(1)
+                    break
+        return form_check, srvrid
+
+    @staticmethod
+    def _extract_auth_token_from_response(response: httpx.Response) -> str | None:
+        """Extract auth-token JWT from Set-Cookie headers, response cookies, or JSON body."""
+        all_resps = list(getattr(response, "history", []) or []) + [response]
+        for r in reversed(all_resps):
+            tok = r.cookies.get("auth-token")
+            if tok and tok.strip():
+                return tok.strip()
+            for sc in r.headers.get_list("set-cookie"):
+                m = re.search(r"auth-token=([^;\s]+)", sc)
+                if m and m.group(1).strip():
+                    return m.group(1).strip()
+        if response.status_code in (200, 201):
+            try:
+                data = response.json()
+                if isinstance(data, dict) and isinstance(data.get("token"), str):
+                    tok = data["token"].strip()
+                    if tok:
+                        return tok
+            except Exception:  # nosec B110
+                pass
+        return None
+
+    def _persist_token(self, token: str, *, persist_to_keyring: bool) -> str:
+        clean_token = token.strip()
+        self.set_token(clean_token)
+        if persist_to_keyring:
+            try:
+                from eboekhouden_mcp.config import set_keyring_secret
+
+                set_keyring_secret(
+                    self.keyring_service_name, "web_session_token", clean_token
+                )
+            except Exception:  # nosec B110
+                pass
+        return clean_token
+
     def _parse_login_response(
         self, response: httpx.Response, *, persist_to_keyring: bool
     ) -> str:
+        cookie_or_json_token = self._extract_auth_token_from_response(response)
+        if cookie_or_json_token:
+            return self._persist_token(
+                cookie_or_json_token, persist_to_keyring=persist_to_keyring
+            )
+
         body = response.text
         if response.status_code not in (200, 201):
             try:
@@ -720,6 +796,15 @@ class WebSessionClient:
                 f"e-Boekhouden web login failed (HTTP {response.status_code}): {body[:200]}"
             )
 
+        if "Gebruikersnaam en/of wachtwoord" in body or "onjuist" in body.lower():
+            raise WebSessionError(
+                "e-Boekhouden web login failed: Gebruikersnaam en/of wachtwoord is onjuist."
+            )
+        if "tweestapsverificatie" in body.lower():
+            raise WebSessionError(
+                "e-Boekhouden web login requires 2FA verification code (tweestapsverificatie)."
+            )
+
         try:
             data = response.json()
         except Exception as exc:
@@ -733,18 +818,85 @@ class WebSessionClient:
                 "e-Boekhouden web login response did not contain a valid token."
             )
 
-        clean_token = token.strip()
-        self.set_token(clean_token)
-        if persist_to_keyring:
-            try:
-                from eboekhouden_mcp.config import set_keyring_secret
+        return self._persist_token(token, persist_to_keyring=persist_to_keyring)
 
-                set_keyring_secret(
-                    self.keyring_service_name, "web_session_token", clean_token
-                )
-            except Exception:  # nosec B110
-                pass
-        return clean_token
+    def _login_via_v1_session(
+        self,
+        client: httpx.Client,
+        username: str,
+        password: str,
+        *,
+        persist_to_keyring: bool,
+    ) -> str:
+        """Authenticate via classic V1 hybrid login (GET + POST /bh/inloggen.asp) to mint auth-token JWT."""
+        v1_url = self._v1_login_url()
+        get_resp = client.get(
+            v1_url,
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "User-Agent": self._get_headers()["user-agent"],
+            },
+        )
+        form_check, srvrid = self._extract_v1_login_fields(get_resp.text, get_resp)
+        form_data = {
+            "txtEmail": username,
+            "txtWachtwoord": password,
+            "submit1": "Inloggen",
+            "txtFormCheck": form_check,
+            "FP": "2557579786",
+            "XSRVX": srvrid,
+        }
+        post_resp = client.post(
+            f"{v1_url}?LOGIN=1",
+            data=form_data,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": v1_url,
+                "User-Agent": self._get_headers()["user-agent"],
+            },
+        )
+        return self._parse_login_response(
+            post_resp, persist_to_keyring=persist_to_keyring
+        )
+
+    async def _async_login_via_v1_session(
+        self,
+        client: httpx.AsyncClient,
+        username: str,
+        password: str,
+        *,
+        persist_to_keyring: bool,
+    ) -> str:
+        """Async version of classic V1 hybrid login (GET + POST /bh/inloggen.asp)."""
+        v1_url = self._v1_login_url()
+        get_resp = await client.get(
+            v1_url,
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "User-Agent": self._get_headers()["user-agent"],
+            },
+        )
+        form_check, srvrid = self._extract_v1_login_fields(get_resp.text, get_resp)
+        form_data = {
+            "txtEmail": username,
+            "txtWachtwoord": password,
+            "submit1": "Inloggen",
+            "txtFormCheck": form_check,
+            "FP": "2557579786",
+            "XSRVX": srvrid,
+        }
+        post_resp = await client.post(
+            f"{v1_url}?LOGIN=1",
+            data=form_data,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": v1_url,
+                "User-Agent": self._get_headers()["user-agent"],
+            },
+        )
+        return self._parse_login_response(
+            post_resp, persist_to_keyring=persist_to_keyring
+        )
 
     def login(
         self,
@@ -754,7 +906,7 @@ class WebSessionClient:
         *,
         persist_to_keyring: bool | None = None,
     ) -> str:
-        """Authenticate against POST /v1/api/auth/login and update self.auth_token."""
+        """Authenticate against e-Boekhouden web session and update self.auth_token."""
         payload = self._build_login_payload(username, password, two_factor_code)
         should_persist = (
             self.persist_to_keyring
@@ -769,15 +921,25 @@ class WebSessionClient:
         }
         if self._http is not None:
             resp = self._http.post(url, json=payload, headers=headers)
+            if resp.status_code >= 500:
+                return self._login_via_v1_session(
+                    self._http,
+                    payload["username"],
+                    payload["password"],
+                    persist_to_keyring=should_persist,
+                )
             return self._parse_login_response(resp, persist_to_keyring=should_persist)
 
         with httpx.Client(
-            base_url=self.base_url,
-            headers=headers,
+            follow_redirects=True,
             timeout=self.timeout,
         ) as client:
-            resp = client.post(url, json=payload)
-            return self._parse_login_response(resp, persist_to_keyring=should_persist)
+            return self._login_via_v1_session(
+                client,
+                payload["username"],
+                payload["password"],
+                persist_to_keyring=should_persist,
+            )
 
     async def async_login(
         self,
@@ -787,7 +949,7 @@ class WebSessionClient:
         *,
         persist_to_keyring: bool | None = None,
     ) -> str:
-        """Async version of login against POST /v1/api/auth/login."""
+        """Async version of e-Boekhouden web session login."""
         payload = self._build_login_payload(username, password, two_factor_code)
         should_persist = (
             self.persist_to_keyring
@@ -802,15 +964,25 @@ class WebSessionClient:
         }
         if self._async_http is not None:
             resp = await self._async_http.post(url, json=payload, headers=headers)
+            if resp.status_code >= 500:
+                return await self._async_login_via_v1_session(
+                    self._async_http,
+                    payload["username"],
+                    payload["password"],
+                    persist_to_keyring=should_persist,
+                )
             return self._parse_login_response(resp, persist_to_keyring=should_persist)
 
         async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=headers,
+            follow_redirects=True,
             timeout=self.timeout,
         ) as client:
-            resp = await client.post(url, json=payload)
-            return self._parse_login_response(resp, persist_to_keyring=should_persist)
+            return await self._async_login_via_v1_session(
+                client,
+                payload["username"],
+                payload["password"],
+                persist_to_keyring=should_persist,
+            )
 
     def _get_headers(self) -> dict[str, str]:
         headers = {
