@@ -30,6 +30,13 @@ WRITE_TOOL_NAMES = frozenset(
         "attach_file_to_quote",
         "delete_quote",
         "send_invoice",
+        "create_time_project",
+        "update_time_project",
+        "create_time_entry",
+        "update_time_entry",
+        "delete_time_entry",
+        "invoice_time_entries",
+        "update_invoice",
     }
 )
 
@@ -41,6 +48,7 @@ DESTRUCTIVE_TOOL_NAMES = frozenset(
         "delete_member",
         "delete_web_mutations",
         "delete_quote",
+        "delete_time_entry",
     }
 )
 
@@ -70,6 +78,13 @@ WEB_SESSION_TOOL_NAMES = frozenset(
         "attach_file_to_quote",
         "delete_quote",
         "send_invoice",
+        "create_time_project",
+        "update_time_project",
+        "create_time_entry",
+        "update_time_entry",
+        "delete_time_entry",
+        "invoice_time_entries",
+        "update_invoice",
     }
 )
 

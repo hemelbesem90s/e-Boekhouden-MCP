@@ -126,6 +126,52 @@ def test_format_write_prompt_quote():
     assert prompt_del == "e-Boekhouden MCP: Approve DELETE delete_quote for ID 2490022?"
 
 
+def test_format_write_prompt_time_and_invoice_update():
+    """Verify prompt formatting for time projects, time entries, and invoice header updates."""
+    p_proj = format_write_prompt("create_time_project", {"name": "26071E_BCKE"})
+    assert p_proj == "e-Boekhouden MCP: Approve POST Time Project '26071E_BCKE'?"
+
+    p_proj_upd = format_write_prompt(
+        "update_time_project", {"project_id": 876343, "active": False}
+    )
+    assert (
+        p_proj_upd
+        == "e-Boekhouden MCP: Approve PUT Time Project ID 876343 (deactivate)?"
+    )
+
+    p_entry = format_write_prompt(
+        "create_time_entry", {"project_id": 876343, "hours": 4.5}
+    )
+    assert (
+        p_entry
+        == "e-Boekhouden MCP: Approve POST Time Entry (4.5h for Project 876343)?"
+    )
+
+    p_entry_upd = format_write_prompt(
+        "update_time_entry", {"entry_id": 28047685, "hours": 3.0}
+    )
+    assert p_entry_upd == "e-Boekhouden MCP: Approve PUT Time Entry ID 28047685 (3.0h)?"
+
+    p_entry_del = format_write_prompt("delete_time_entry", {"entry_id": 28047685})
+    assert (
+        p_entry_del
+        == "e-Boekhouden MCP: Approve DELETE delete_time_entry for ID 28047685?"
+    )
+
+    p_inv = format_write_prompt(
+        "invoice_time_entries", {"entry_ids": [28047685, 28047687]}
+    )
+    assert p_inv == "e-Boekhouden MCP: Approve Invoicing 2 Time Entries?"
+
+    p_inv_upd = format_write_prompt(
+        "update_invoice", {"invoice_id": 73221294, "reference": "26071E"}
+    )
+    assert (
+        p_inv_upd
+        == "e-Boekhouden MCP: Approve PUT Invoice Header for Invoice ID 73221294 (Reference: 26071E)?"
+    )
+
+
 def test_format_write_prompt_mutation_with_explicit_amount():
     prompt = format_write_prompt(
         "create_mutation",

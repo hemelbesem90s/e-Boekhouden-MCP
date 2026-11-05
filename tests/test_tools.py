@@ -75,12 +75,12 @@ class TestRegisterAllTools:
     """Tests for registering all tools."""
 
     def test_registers_all_tools(self):
-        """Test that all tools are registered (37 base + 14 power + 3 inbox + 22 web = 76)."""
+        """Test that all tools are registered (37 base + 14 power + 3 inbox + 29 web = 83)."""
         registry = ToolRegistry()
         register_all_tools(registry)
 
-        # 37 base tools + 14 power tools + 3 inbox tools + 22 web session tools
-        assert len(registry) == 76
+        # 37 base tools + 14 power tools + 3 inbox tools + 29 web session tools
+        assert len(registry) == 83
 
     def test_tool_categories(self):
         """Test that tools from all categories are registered."""
@@ -118,6 +118,7 @@ class TestRegisterAllTools:
                     "save_",
                     "move_",
                     "upload_",
+                    "invoice_",
                 )
             )
         }

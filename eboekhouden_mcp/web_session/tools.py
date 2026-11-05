@@ -1374,3 +1374,568 @@ class SendInvoiceTool(BaseTool):
             "success": True,
             **result,
         }
+
+
+# --------------------------------------------------------------------------- #
+# Urenregistratie (Time Tracking) & Invoice Header Update Tools
+# --------------------------------------------------------------------------- #
+
+
+class CreateTimeProjectInput(ToolSchema):
+    """Input schema for create_time_project."""
+
+    name: str = Field(
+        min_length=1,
+        max_length=100,
+        description="Project name (e.g. '26071E_BCKE_Tank_Platforms')",
+    )
+    relation_id: int | None = Field(
+        default=None, ge=1, description="Customer relation ID"
+    )
+    active: bool = Field(default=True, description="Whether project is active")
+    hourly_rate: float = Field(default=0.0, ge=0.0, description="Hourly rate")
+    hourly_rate_in_ex: Literal["EX", "IN"] = Field(
+        default="EX", description="'EX' for VAT exclusive or 'IN' for VAT inclusive"
+    )
+    hourly_rate_ledger_id: int | None = Field(
+        default=None,
+        description="Hourly rate revenue ledger ID or 6-digit ledger code (e.g. 810200, 810300)",
+    )
+    hourly_rate_vat_code: str | None = Field(
+        default=None,
+        description="Hourly rate VAT code (e.g. 'BI_EU_VERK_D', 'HOOG_VERK_21')",
+    )
+    km_rate: float = Field(default=0.0, ge=0.0, description="Kilometer rate")
+    km_rate_in_ex: Literal["EX", "IN"] = Field(
+        default="EX", description="'EX' for VAT exclusive or 'IN' for VAT inclusive"
+    )
+    km_rate_ledger_id: int | None = Field(
+        default=None,
+        description="KM rate revenue ledger ID or 6-digit ledger code",
+    )
+    km_rate_vat_code: str | None = Field(
+        default=None,
+        description="KM rate VAT code (e.g. 'BI_EU_VERK_D', 'HOOG_VERK_21')",
+    )
+    invoice_template_id: int | None = Field(
+        default=None, ge=1, description="Invoice template ID"
+    )
+    cost_center_id: int | None = Field(
+        default=None, ge=0, description="Cost center ID (kostenplaatsId)"
+    )
+    invoicing_method: int = Field(
+        default=1, description="Invoicing method (factuurWijze, default 1)"
+    )
+    group_by: int = Field(
+        default=0, description="Group time entries by (factuurGroeperenOp, default 0)"
+    )
+    description_type: int = Field(
+        default=1,
+        description="Invoice line description type (factuurOmschrijvingType, default 1)",
+    )
+    notes: str | None = Field(
+        default=None, description="Internal notes for the project"
+    )
+    limit_enabled: bool = Field(
+        default=False, description="Whether to set an hour limit"
+    )
+    limit_hours: float = Field(default=0.0, ge=0.0, description="Hour limit")
+    limit_type: int = Field(default=0, description="Limit type (default 0)")
+    alert_percentage: int = Field(
+        default=0, ge=0, le=100, description="Alert percentage when reaching limit"
+    )
+    alert_user_ids: list[int] | None = Field(
+        default=None, description="User IDs to notify when limit percentage reached"
+    )
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for creating a time project",
+    )
+
+
+class CreateTimeProjectTool(BaseTool):
+    """Create a time-tracking project in e-Boekhouden."""
+
+    name = "create_time_project"
+    description = (
+        "Create a time-tracking project in e-Boekhouden via POST /v1/api/project, with optional "
+        "hourly/km rates, revenue ledger codes (resolving 6-digit codes), and customer relation."
+    )
+    input_schema = CreateTimeProjectInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        result = await web_client.async_create_time_project(
+            name=arguments["name"],
+            relation_id=arguments.get("relation_id"),
+            active=arguments.get("active", True),
+            invoice_template_id=arguments.get("invoice_template_id"),
+            invoicing_method=arguments.get("invoicing_method", 1),
+            group_by=arguments.get("group_by", 0),
+            description_type=arguments.get("description_type", 1),
+            hourly_rate=arguments.get("hourly_rate", 0.0),
+            hourly_rate_in_ex=arguments.get("hourly_rate_in_ex", "EX"),
+            hourly_rate_ledger_id=arguments.get("hourly_rate_ledger_id"),
+            hourly_rate_vat_code=arguments.get("hourly_rate_vat_code"),
+            km_rate=arguments.get("km_rate", 0.0),
+            km_rate_in_ex=arguments.get("km_rate_in_ex", "EX"),
+            km_rate_ledger_id=arguments.get("km_rate_ledger_id"),
+            km_rate_vat_code=arguments.get("km_rate_vat_code"),
+            cost_center_id=arguments.get("cost_center_id", 0),
+            notes=arguments.get("notes") or "",
+            limit_enabled=arguments.get("limit_enabled", False),
+            limit_hours=arguments.get("limit_hours", 0.0),
+            limit_type=arguments.get("limit_type", 0),
+            alert_percentage=arguments.get("alert_percentage", 0),
+            alert_user_ids=arguments.get("alert_user_ids"),
+        )
+        return {
+            "success": True,
+            "project": result,
+        }
+
+
+class UpdateTimeProjectInput(ToolSchema):
+    """Input schema for update_time_project."""
+
+    project_id: int = Field(ge=1, description="Time project ID to update")
+    name: str | None = Field(
+        default=None, min_length=1, max_length=100, description="New project name"
+    )
+    active: bool | None = Field(
+        default=None, description="Set to false to mark project inactive / finished"
+    )
+    relation_id: int | None = Field(
+        default=None, ge=1, description="Customer relation ID"
+    )
+    hourly_rate: float | None = Field(default=None, ge=0.0, description="Hourly rate")
+    hourly_rate_in_ex: Literal["EX", "IN"] | None = Field(
+        default=None, description="'EX' for VAT exclusive or 'IN' for VAT inclusive"
+    )
+    hourly_rate_ledger_id: int | None = Field(
+        default=None,
+        description="Hourly rate revenue ledger ID or 6-digit ledger code",
+    )
+    hourly_rate_vat_code: str | None = Field(
+        default=None, description="Hourly rate VAT code"
+    )
+    km_rate: float | None = Field(default=None, ge=0.0, description="Kilometer rate")
+    km_rate_in_ex: Literal["EX", "IN"] | None = Field(
+        default=None, description="'EX' for VAT exclusive or 'IN' for VAT inclusive"
+    )
+    km_rate_ledger_id: int | None = Field(
+        default=None, description="KM rate revenue ledger ID or 6-digit ledger code"
+    )
+    km_rate_vat_code: str | None = Field(default=None, description="KM rate VAT code")
+    invoice_template_id: int | None = Field(
+        default=None, ge=1, description="Invoice template ID"
+    )
+    cost_center_id: int | None = Field(default=None, ge=0, description="Cost center ID")
+    invoicing_method: int | None = Field(
+        default=None, description="Invoicing method (factuurWijze)"
+    )
+    group_by: int | None = Field(
+        default=None, description="Group time entries by (factuurGroeperenOp)"
+    )
+    description_type: int | None = Field(
+        default=None,
+        description="Invoice line description type (factuurOmschrijvingType)",
+    )
+    notes: str | None = Field(default=None, description="Project notes")
+    limit_enabled: bool | None = Field(default=None, description="Limit enabled")
+    limit_hours: float | None = Field(default=None, ge=0.0, description="Hour limit")
+    limit_type: int | None = Field(default=None, description="Limit type")
+    alert_percentage: int | None = Field(
+        default=None, ge=0, le=100, description="Alert percentage"
+    )
+    alert_user_ids: list[int] | None = Field(default=None, description="Alert user IDs")
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for updating a time project",
+    )
+
+
+class UpdateTimeProjectTool(BaseTool):
+    """Update or deactivate an existing time project in e-Boekhouden."""
+
+    name = "update_time_project"
+    description = (
+        "Update or deactivate an existing time-tracking project in e-Boekhouden via PUT /v1/api/project. "
+        "Allows updating name, rates, client, ledger codes, or setting active=false upon project closure."
+    )
+    input_schema = UpdateTimeProjectInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        result = await web_client.async_update_time_project(
+            project_id=int(arguments["project_id"]),
+            name=arguments.get("name"),
+            active=arguments.get("active"),
+            relation_id=arguments.get("relation_id"),
+            invoice_template_id=arguments.get("invoice_template_id"),
+            invoicing_method=arguments.get("invoicing_method"),
+            group_by=arguments.get("group_by"),
+            description_type=arguments.get("description_type"),
+            hourly_rate=arguments.get("hourly_rate"),
+            hourly_rate_in_ex=arguments.get("hourly_rate_in_ex"),
+            hourly_rate_ledger_id=arguments.get("hourly_rate_ledger_id"),
+            hourly_rate_vat_code=arguments.get("hourly_rate_vat_code"),
+            km_rate=arguments.get("km_rate"),
+            km_rate_in_ex=arguments.get("km_rate_in_ex"),
+            km_rate_ledger_id=arguments.get("km_rate_ledger_id"),
+            km_rate_vat_code=arguments.get("km_rate_vat_code"),
+            cost_center_id=arguments.get("cost_center_id"),
+            notes=arguments.get("notes"),
+            limit_enabled=arguments.get("limit_enabled"),
+            limit_hours=arguments.get("limit_hours"),
+            limit_type=arguments.get("limit_type"),
+            alert_percentage=arguments.get("alert_percentage"),
+            alert_user_ids=arguments.get("alert_user_ids"),
+        )
+        return {
+            "success": True,
+            "project": result,
+        }
+
+
+class CreateTimeEntryInput(ToolSchema):
+    """Input schema for create_time_entry."""
+
+    project_id: int = Field(ge=1, description="Project ID")
+    activity_id: int = Field(ge=1, description="Activity ID (activiteitId)")
+    hours: float = Field(gt=0.0, description="Number of hours (aantal)")
+    date: str | None = Field(
+        default=None, description="Date (YYYY-MM-DD, defaults to today)"
+    )
+    employee_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Employee/User ID (medewerkerId, auto-resolved if omitted)",
+    )
+    notes: str | None = Field(
+        default=None, description="Notes/work description (opmerkingen)"
+    )
+    billable: bool = Field(
+        default=True, description="Whether the entry is billable (declarabel)"
+    )
+    kilometers: float = Field(default=0.0, ge=0.0, description="Number of kilometers")
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for creating a time entry",
+    )
+
+
+class CreateTimeEntryTool(BaseTool):
+    """Log a time entry in e-Boekhouden Urenregistratie."""
+
+    name = "create_time_entry"
+    description = (
+        "Log a new time entry in e-Boekhouden Urenregistratie via POST /v1/api/uur, "
+        "specifying project, activity, hours, date, billable status, and optional notes/km."
+    )
+    input_schema = CreateTimeEntryInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        result = await web_client.async_create_time_entry(
+            project_id=int(arguments["project_id"]),
+            activity_id=int(arguments["activity_id"]),
+            hours=float(arguments["hours"]),
+            date=arguments.get("date"),
+            employee_id=arguments.get("employee_id"),
+            notes=arguments.get("notes") or "",
+            billable=arguments.get("billable", True),
+            kilometers=float(arguments.get("kilometers", 0.0)),
+        )
+        return {
+            "success": True,
+            "entry": result,
+        }
+
+
+class UpdateTimeEntryInput(ToolSchema):
+    """Input schema for update_time_entry."""
+
+    entry_id: int = Field(ge=1, description="Time entry ID (uur ID) to update")
+    hours: float | None = Field(
+        default=None, gt=0.0, description="New number of hours (aantal)"
+    )
+    date: str | None = Field(default=None, description="New date (YYYY-MM-DD)")
+    project_id: int | None = Field(default=None, ge=1, description="New project ID")
+    activity_id: int | None = Field(default=None, ge=1, description="New activity ID")
+    employee_id: int | None = Field(default=None, ge=1, description="New employee ID")
+    notes: str | None = Field(
+        default=None, description="New notes/work description (opmerkingen)"
+    )
+    billable: bool | None = Field(
+        default=None, description="New billable status (declarabel)"
+    )
+    kilometers: float | None = Field(
+        default=None, ge=0.0, description="New number of kilometers"
+    )
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for updating a time entry",
+    )
+
+
+class UpdateTimeEntryTool(BaseTool):
+    """Update an existing time entry in e-Boekhouden Urenregistratie."""
+
+    name = "update_time_entry"
+    description = (
+        "Update an existing time entry in e-Boekhouden Urenregistratie via PUT /v1/api/uur. "
+        "Allows editing hours, date, activity, project, notes, or billable status."
+    )
+    input_schema = UpdateTimeEntryInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        result = await web_client.async_update_time_entry(
+            entry_id=int(arguments["entry_id"]),
+            date=arguments.get("date"),
+            hours=arguments.get("hours"),
+            project_id=arguments.get("project_id"),
+            activity_id=arguments.get("activity_id"),
+            employee_id=arguments.get("employee_id"),
+            notes=arguments.get("notes"),
+            billable=arguments.get("billable"),
+            kilometers=arguments.get("kilometers"),
+        )
+        return {
+            "success": True,
+            "entry": result,
+        }
+
+
+class DeleteTimeEntryInput(ToolSchema):
+    """Input schema for delete_time_entry."""
+
+    entry_id: int = Field(ge=1, description="Time entry ID (uur ID) to delete")
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for deleting a time entry",
+    )
+
+
+class DeleteTimeEntryTool(BaseTool):
+    """Delete a time entry from e-Boekhouden Urenregistratie."""
+
+    name = "delete_time_entry"
+    description = "Delete a time entry from e-Boekhouden Urenregistratie via DELETE /v1/api/uur/{entry_id}."
+    input_schema = DeleteTimeEntryInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        return await web_client.async_delete_time_entry(
+            entry_id=int(arguments["entry_id"])
+        )
+
+
+class InvoiceTimeEntriesInput(ToolSchema):
+    """Input schema for invoice_time_entries."""
+
+    entry_ids: list[int] = Field(
+        default_factory=list,
+        description="List of time entry IDs (uur IDs) to convert into an invoice",
+    )
+    time_entry_ids: list[int] | None = Field(
+        default=None,
+        description="Alias for entry_ids",
+    )
+    ids: list[int] | None = Field(
+        default=None,
+        description="Alias for entry_ids",
+    )
+    date: str | None = Field(
+        default=None,
+        description="Invoice date (YYYY-MM-DD, defaults to today)",
+    )
+    group_by: int = Field(
+        default=4,
+        description="Grouping mode (groeperenOp, default 4 = per day/entry)",
+    )
+    description_type: int = Field(
+        default=2,
+        description="Description type (omschrijvingType, default 2)",
+    )
+    process_directly: bool = Field(
+        default=True,
+        description="Process invoice directly (verwerkDirect, default True)",
+    )
+    send_directly: bool = Field(
+        default=False,
+        description="Send invoice directly by email (verstuurDirect, default False)",
+    )
+    reference: str | None = Field(
+        default=None,
+        max_length=50,
+        description="Optional customer reference / UPID (kenmerk) to update on generated invoice",
+    )
+    invoice_text: str | None = Field(
+        default=None,
+        description="Optional invoice header text (factuurtekst) to update on generated invoice",
+    )
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for invoicing time entries",
+    )
+
+    @model_validator(mode="after")
+    def validate_ids(self) -> "InvoiceTimeEntriesInput":
+        if not self.entry_ids:
+            if self.time_entry_ids:
+                self.entry_ids = list(self.time_entry_ids)
+            elif self.ids:
+                self.entry_ids = list(self.ids)
+        if not self.entry_ids:
+            raise ValueError(
+                "At least one time entry ID must be provided in entry_ids."
+            )
+        return self
+
+
+class InvoiceTimeEntriesTool(BaseTool):
+    """Convert unbilled time entries into an invoice."""
+
+    name = "invoice_time_entries"
+    description = (
+        "Convert unbilled time entries into an invoice via POST /v1/api/uur/factureren. "
+        "If reference (kenmerk) or invoice_text (factuurtekst) are provided, automatically "
+        "updates the created invoice header and regenerates the invoice PDF."
+    )
+    input_schema = InvoiceTimeEntriesInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        entry_ids = (
+            arguments.get("entry_ids")
+            or arguments.get("ids")
+            or arguments.get("time_entry_ids")
+            or []
+        )
+        return await web_client.async_invoice_time_entries(
+            entry_ids=[int(e) for e in entry_ids],
+            date=arguments.get("date"),
+            group_by=arguments.get("group_by", 4),
+            description_type=arguments.get("description_type", 2),
+            process_directly=arguments.get("process_directly", True),
+            send_directly=arguments.get("send_directly", False),
+            reference=arguments.get("reference"),
+            invoice_text=arguments.get("invoice_text"),
+        )
+
+
+class UpdateInvoiceInput(ToolSchema):
+    """Input schema for update_invoice."""
+
+    invoice_id: int = Field(ge=1, description="Invoice ID to update")
+    reference: str | None = Field(
+        default=None, max_length=50, description="Customer reference / UPID (kenmerk)"
+    )
+    invoice_text: str | None = Field(
+        default=None, description="Invoice header text / description (factuurtekst)"
+    )
+    date: str | None = Field(default=None, description="Invoice date (YYYY-MM-DD)")
+    payment_term_days: int | None = Field(
+        default=None,
+        ge=0,
+        le=365,
+        description="Payment term in days (betalingstermijn)",
+    )
+    template_id: int | None = Field(
+        default=None, ge=1, description="Invoice template ID (sjabloonId)"
+    )
+    internal_note: str | None = Field(
+        default=None, description="Internal note (notitie)"
+    )
+    confirm_write: bool | None = Field(
+        default=None,
+        description="Explicit confirmation flag for updating an invoice header",
+    )
+
+
+class UpdateInvoiceTool(BaseTool):
+    """Update outbound invoice headers and regenerate PDF."""
+
+    name = "update_invoice"
+    description = (
+        "Update existing invoice headers (reference/kenmerk, invoice_text/factuurtekst, "
+        "date, payment terms, template) via PUT /v1/api/factuur/model and trigger PDF invoice regeneration."
+    )
+    input_schema = UpdateInvoiceInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        return await web_client.async_update_invoice(
+            invoice_id=int(arguments["invoice_id"]),
+            reference=arguments.get("reference"),
+            invoice_text=arguments.get("invoice_text"),
+            date=arguments.get("date"),
+            payment_term_days=arguments.get("payment_term_days"),
+            template_id=arguments.get("template_id"),
+            internal_note=arguments.get("internal_note"),
+        )

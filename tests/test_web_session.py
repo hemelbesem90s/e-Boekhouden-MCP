@@ -590,6 +590,13 @@ def test_server_web_session_policy():
     assert server_web.tool_is_enabled("save_web_mutation") is False
     assert server_web.tool_is_enabled("upload_archive_file") is False
     assert server_web.tool_is_enabled("delete_web_mutations") is False
+    assert server_web.tool_is_enabled("create_time_project") is False
+    assert server_web.tool_is_enabled("update_time_project") is False
+    assert server_web.tool_is_enabled("create_time_entry") is False
+    assert server_web.tool_is_enabled("update_time_entry") is False
+    assert server_web.tool_is_enabled("delete_time_entry") is False
+    assert server_web.tool_is_enabled("invoice_time_entries") is False
+    assert server_web.tool_is_enabled("update_invoice") is False
 
     # 3. Web session enabled with write tools
     config_web_write = MCPConfig(
@@ -612,6 +619,13 @@ def test_server_web_session_policy():
     assert server_web_write.tool_is_enabled("save_web_mutation") is True
     assert server_web_write.tool_is_enabled("upload_archive_file") is True
     assert server_web_write.tool_is_enabled("delete_web_mutations") is True
+    assert server_web_write.tool_is_enabled("create_time_project") is True
+    assert server_web_write.tool_is_enabled("update_time_project") is True
+    assert server_web_write.tool_is_enabled("create_time_entry") is True
+    assert server_web_write.tool_is_enabled("update_time_entry") is True
+    assert server_web_write.tool_is_enabled("delete_time_entry") is True
+    assert server_web_write.tool_is_enabled("invoice_time_entries") is True
+    assert server_web_write.tool_is_enabled("update_invoice") is True
 
 
 # --------------------------------------------------------------------------- #
@@ -1912,3 +1926,436 @@ async def test_web_session_auto_login_and_silent_refresh(monkeypatch):
 
     sync_http.close()
     await async_http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_time_tracking_and_invoice_update_write_tools():
+    """Verify sync and async time project/entry write tools, invoice updates, and enriched send_invoice."""
+    from eboekhouden_mcp.web_session.tools import (
+        CreateTimeEntryTool,
+        CreateTimeProjectTool,
+        DeleteTimeEntryTool,
+        InvoiceTimeEntriesInput,
+        InvoiceTimeEntriesTool,
+        UpdateInvoiceTool,
+        UpdateTimeEntryTool,
+        UpdateTimeProjectTool,
+    )
+
+    recorded_posts: list[dict[str, Any]] = []
+    recorded_puts: list[dict[str, Any]] = []
+    recorded_deletes: list[str] = []
+    recorded_gets: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        method = request.method
+
+        if method == "GET":
+            recorded_gets.append(url)
+            if "/v1/api/project/876343" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": 876343,
+                        "naam": "26071E_BCKE_Tank_Platforms",
+                        "actief": True,
+                        "relatieId": 70666369,
+                        "factuurSjabloonId": 1363414,
+                        "factuurWijze": 1,
+                        "factuurGroeperenOp": 0,
+                        "factuurOmschrijvingType": 1,
+                        "uurtarief": 85.0,
+                        "uurtariefInEx": "EX",
+                        "uurtariefGrootboekrekeningId": 51798502,
+                        "uurtariefBtwCode": "BI_EU_VERK_D",
+                        "kmtarief": 0.35,
+                        "kmtariefInEx": "EX",
+                        "kmtariefGrootboekrekeningId": 51798502,
+                        "kmtariefBtwCode": "BI_EU_VERK_D",
+                        "kostenplaatsId": 492222,
+                        "notities": "Platforms initial",
+                        "stelLimietIn": False,
+                        "limiet": 0,
+                        "limietType": 0,
+                        "stuurMeldingBijPercentage": 0,
+                        "stuurMeldingGebruikerIds": [],
+                    },
+                )
+            if "/v1/api/grootboekrekening/selectlist/actief/VWBAL" in url:
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "id": 51798501,
+                            "code": "810200",
+                            "omschrijving": "Omzet hoog NL",
+                        },
+                        {
+                            "id": 51798502,
+                            "code": "810300",
+                            "omschrijving": "Omzet EU diensten",
+                        },
+                    ],
+                )
+            if "/v1/api/user/selectlist" in url:
+                return httpx.Response(
+                    200, json=[{"id": 841802, "naam": "Jacob Grobler"}]
+                )
+            if "/v1/api/uur/28047685" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": 28047685,
+                        "datum": {"year": 2026, "month": 10, "day": 6},
+                        "medewerkerId": 841802,
+                        "projectId": 876343,
+                        "activiteitId": 925998,
+                        "aantal": 2.0,
+                        "opmerkingen": "Drawings for platform",
+                        "declarabel": True,
+                        "kilometers": 0.0,
+                        "gefactureerd": 0,
+                    },
+                )
+            if "/v1/api/factuur/73221294" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "factuur": {
+                            "id": 73221294,
+                            "nummer": "F00062",
+                            "kenmerk": "OLD_KENMERK",
+                            "factuurtekst": "OLD_TEKST",
+                            "datum": {"year": 2026, "month": 11, "day": 5},
+                            "betalingstermijn": 30,
+                            "sjabloonId": 1363414,
+                        },
+                        "factuurItems": [],
+                    },
+                )
+            if "/v1/api/factuur/pdfinvoiceschedule" in url:
+                return httpx.Response(200, json={"scheduled": True})
+
+        elif method == "POST":
+            body = (
+                json.loads(request.content.decode("utf-8")) if request.content else {}
+            )
+            recorded_posts.append({"url": url, "body": body})
+            if "/v1/api/project" in url:
+                return httpx.Response(200, json={**body, "id": 876344})
+            if "/v1/api/uur/factureren" in url:
+                if 999999 in body.get("ids", []):
+                    return httpx.Response(
+                        200,
+                        json={
+                            "errorCount": 1,
+                            "errorMessages": ["Uur al gefactureerd"],
+                            "ids": [],
+                        },
+                    )
+                return httpx.Response(
+                    200, json={"errorCount": 0, "errorMessages": [], "ids": [73221294]}
+                )
+            if "/v1/api/uur" in url:
+                return httpx.Response(200, json={**body, "id": 28047686})
+            if "/v1/api/factuur/mail" in url:
+                return httpx.Response(200, json={"errorCount": 0})
+
+        elif method == "PUT":
+            body = (
+                json.loads(request.content.decode("utf-8")) if request.content else {}
+            )
+            recorded_puts.append({"url": url, "body": body})
+            if "/v1/api/project" in url:
+                return httpx.Response(200, json=body)
+            if "/v1/api/uur" in url:
+                return httpx.Response(200, json=body)
+            if "/v1/api/factuur/model" in url:
+                return httpx.Response(200, json={"saved": True})
+
+        elif method == "DELETE":
+            recorded_deletes.append(url)
+            if "/v1/api/uur/" in url:
+                return httpx.Response(200, json={"deleted": True})
+
+        return httpx.Response(404, json={"error": f"Not found: {url}"})
+
+    sync_http_test = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    async_http_test = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    client_sync = WebSessionClient(
+        auth_token="test-session-token",
+        http_client=sync_http_test,
+    )
+    client_async = WebSessionClient(
+        auth_token="test-session-token",
+        async_http_client=async_http_test,
+    )
+
+    try:
+        # 1. Sync & Async get_time_project
+        p_sync = client_sync.get_time_project(876343)
+        assert p_sync["id"] == 876343
+        assert p_sync["naam"] == "26071E_BCKE_Tank_Platforms"
+
+        p_async = await client_async.async_get_time_project(876343)
+        assert p_async["id"] == 876343
+
+        # 2. Sync create_time_project (with 6-digit ledger code resolution)
+        created_p = client_sync.create_time_project(
+            name="26071E_BCKE_Tank_Platforms_New",
+            relation_id=70666369,
+            hourly_rate=85.0,
+            hourly_rate_ledger_id=810300,  # 6-digit code -> resolves to 51798502
+            hourly_rate_vat_code="BI_EU_VERK_D",
+            notes="New platform build",
+        )
+        assert created_p["id"] == 876344
+        post_proj = [p for p in recorded_posts if "/v1/api/project" in p["url"]][-1]
+        assert post_proj["body"]["uurtariefGrootboekrekeningId"] == 51798502
+        assert post_proj["body"]["naam"] == "26071E_BCKE_Tank_Platforms_New"
+
+        # 2b. Async create_time_project
+        created_p_async = await client_async.async_create_time_project(
+            name="26071E_BCKE_Async",
+            relation_id=70666369,
+            hourly_rate=90.0,
+            hourly_rate_ledger_id=810300,
+        )
+        assert created_p_async["id"] == 876344
+
+        # 3. Sync & Async update_time_project (set active=False on completion)
+        upd_p = client_sync.update_time_project(
+            project_id=876343,
+            active=False,
+            notes="Completed platforms",
+        )
+        assert upd_p["actief"] is False
+        assert upd_p["notities"] == "Completed platforms"
+
+        upd_p_async = await client_async.async_update_time_project(
+            project_id=876343,
+            active=True,
+            hourly_rate=95.0,
+        )
+        assert upd_p_async["actief"] is True
+        assert upd_p_async["uurtarief"] == 95.0
+
+        # 4. Sync & Async get_time_entry
+        entry_sync = client_sync.get_time_entry(28047685)
+        assert entry_sync["id"] == 28047685
+        assert entry_sync["aantal"] == 2.0
+
+        entry_async = await client_async.async_get_time_entry(28047685)
+        assert entry_async["id"] == 28047685
+
+        # 5. Sync & Async create_time_entry (auto-resolving employee_id)
+        new_entry = client_sync.create_time_entry(
+            project_id=876343,
+            activity_id=925998,
+            hours=3.5,
+            date="2026-11-05",
+            notes="Welding inspection",
+        )
+        assert new_entry["id"] == 28047686
+        post_uur = [
+            p
+            for p in recorded_posts
+            if "/v1/api/uur" in p["url"] and not p["url"].endswith("factureren")
+        ][-1]
+        assert post_uur["body"]["medewerkerId"] == 841802
+        assert post_uur["body"]["datum"] == {"year": 2026, "month": 11, "day": 5}
+
+        new_entry_async = await client_async.async_create_time_entry(
+            project_id=876343,
+            activity_id=925998,
+            hours=2.5,
+            employee_id=841802,
+        )
+        assert new_entry_async["id"] == 28047686
+
+        # 6. Sync & Async update_time_entry
+        upd_entry = client_sync.update_time_entry(
+            entry_id=28047685,
+            hours=4.0,
+            notes="Revised CAD models",
+        )
+        assert upd_entry["aantal"] == 4.0
+        assert upd_entry["opmerkingen"] == "Revised CAD models"
+
+        upd_entry_async = await client_async.async_update_time_entry(
+            entry_id=28047685,
+            hours=5.0,
+        )
+        assert upd_entry_async["aantal"] == 5.0
+
+        # 7. Sync & Async delete_time_entry
+        del_sync = client_sync.delete_time_entry(28047685)
+        assert del_sync["success"] is True
+        assert any("/v1/api/uur/28047685" in u for u in recorded_deletes)
+
+        del_async = await client_async.async_delete_time_entry(28047685)
+        assert del_async["success"] is True
+
+        # 8. Sync & Async update_invoice (model + pdf schedule)
+        upd_inv = client_sync.update_invoice(
+            invoice_id=73221294,
+            reference="26071E_BCKE",
+            invoice_text="Detailing of Tank Platforms",
+            payment_term_days=30,
+        )
+        assert upd_inv["success"] is True
+        assert upd_inv["reference"] == "26071E_BCKE"
+        assert upd_inv["invoice_text"] == "Detailing of Tank Platforms"
+        put_model = [p for p in recorded_puts if "/v1/api/factuur/model" in p["url"]][
+            -1
+        ]
+        assert put_model["body"]["factuur"]["kenmerk"] == "26071E_BCKE"
+        assert any("pdfinvoiceschedule?factuurId=73221294" in u for u in recorded_gets)
+
+        upd_inv_async = await client_async.async_update_invoice(
+            invoice_id=73221294,
+            reference="26071E_BCKE_V2",
+        )
+        assert upd_inv_async["reference"] == "26071E_BCKE_V2"
+
+        # 9. Sync & Async invoice_time_entries (with atomic header post-update)
+        inv_sync = client_sync.invoice_time_entries(
+            entry_ids=[28047685],
+            reference="26071E_AUTOREF",
+            invoice_text="Auto-invoiced time",
+        )
+        assert inv_sync["success"] is True
+        assert inv_sync["invoice_ids"] == [73221294]
+        assert len(inv_sync["updated_invoices"]) == 1
+        assert inv_sync["updated_invoices"][0]["reference"] == "26071E_AUTOREF"
+
+        inv_async = await client_async.async_invoice_time_entries(
+            entry_ids=[28047685],
+            reference="26071E_ASYNC_REF",
+            invoice_text="Async-invoiced time",
+        )
+        assert inv_async["success"] is True
+        assert inv_async["invoice_ids"] == [73221294]
+        assert len(inv_async["updated_invoices"]) == 1
+
+        # 9b. Error handling on invoice_time_entries
+        with pytest.raises(WebSessionError, match="Uur al gefactureerd"):
+            client_sync.invoice_time_entries([999999])
+
+        with pytest.raises(WebSessionError, match="Uur al gefactureerd"):
+            await client_async.async_invoice_time_entries([999999])
+
+        # 10. Sync & Async enriched send_invoice
+        mail_sync = client_sync.send_invoice_email(
+            invoice_id=73221294,
+            recipient_email="finance@baecke.nl",
+            sender_email="jacob@grobler.nl",
+            sender_name="Jacob Grobler",
+            subject="Factuur F00062",
+            body="Geachte heer Baecke,\n\nHierbij de factuur.",
+            email_template_id=123,
+        )
+        assert mail_sync["success"] is True
+        assert mail_sync["from_email"] == "jacob@grobler.nl"
+        assert mail_sync["from_name"] == "Jacob Grobler"
+        assert mail_sync["email_template_id"] == 123
+        assert mail_sync["body"] == "Geachte heer Baecke,\n\nHierbij de factuur."
+
+        mail_async = await client_async.async_send_invoice_email(
+            invoice_id=73221294,
+            recipient_email="finance@baecke.nl",
+            sender_email="jacob@grobler.nl",
+            sender_name="Jacob Grobler",
+            subject="Factuur F00062",
+            body="Async body text",
+        )
+        assert mail_async["from_email"] == "jacob@grobler.nl"
+        assert mail_async["body"] == "Async body text"
+
+        # 11. MCP Tool Execution tests
+        mock_eb_client = MagicMock()
+
+        # CreateTimeProjectTool
+        tool_cp = CreateTimeProjectTool(client_async)
+        res_cp = await tool_cp.execute(
+            mock_eb_client,
+            {"name": "26071E_Tool_Test", "relation_id": 70666369, "hourly_rate": 85.0},
+        )
+        assert res_cp["success"] is True
+        assert res_cp["project"]["id"] == 876344
+
+        # UpdateTimeProjectTool
+        tool_up = UpdateTimeProjectTool(client_async)
+        res_up = await tool_up.execute(
+            mock_eb_client,
+            {"project_id": 876343, "active": False},
+        )
+        assert res_up["success"] is True
+        assert res_up["project"]["actief"] is False
+
+        # CreateTimeEntryTool
+        tool_ce = CreateTimeEntryTool(client_async)
+        res_ce = await tool_ce.execute(
+            mock_eb_client,
+            {"project_id": 876343, "activity_id": 925998, "hours": 4.5},
+        )
+        assert res_ce["success"] is True
+        assert res_ce["entry"]["id"] == 28047686
+
+        # UpdateTimeEntryTool
+        tool_ue = UpdateTimeEntryTool(client_async)
+        res_ue = await tool_ue.execute(
+            mock_eb_client,
+            {"entry_id": 28047685, "hours": 6.0},
+        )
+        assert res_ue["success"] is True
+        assert res_ue["entry"]["aantal"] == 6.0
+
+        # DeleteTimeEntryTool
+        tool_de = DeleteTimeEntryTool(client_async)
+        res_de = await tool_de.execute(
+            mock_eb_client,
+            {"entry_id": 28047685},
+        )
+        assert res_de["success"] is True
+
+        # InvoiceTimeEntriesTool
+        tool_inv = InvoiceTimeEntriesTool(client_async)
+        res_inv = await tool_inv.execute(
+            mock_eb_client,
+            {"entry_ids": [28047685], "reference": "26071E_TOOL_REF"},
+        )
+        assert res_inv["success"] is True
+        assert res_inv["invoice_ids"] == [73221294]
+
+        # InvoiceTimeEntriesInput alias tests
+        validated_input_ids = InvoiceTimeEntriesInput(ids=[101, 102])
+        assert validated_input_ids.entry_ids == [101, 102]
+        validated_input_aliases = InvoiceTimeEntriesInput(time_entry_ids=[201])
+        assert validated_input_aliases.entry_ids == [201]
+        with pytest.raises(ValueError, match="At least one time entry ID"):
+            InvoiceTimeEntriesInput(entry_ids=[])
+
+        # UpdateInvoiceTool
+        tool_ui = UpdateInvoiceTool(client_async)
+        res_ui = await tool_ui.execute(
+            mock_eb_client,
+            {
+                "invoice_id": 73221294,
+                "reference": "26071E_FINAL",
+                "invoice_text": "Final Platforms",
+            },
+        )
+        assert res_ui["success"] is True
+        assert res_ui["reference"] == "26071E_FINAL"
+
+    finally:
+        sync_http_test.close()
+        await async_http_test.aclose()

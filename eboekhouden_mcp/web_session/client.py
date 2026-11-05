@@ -7,6 +7,7 @@ import copy
 import datetime as dt
 import hashlib
 import hmac
+import logging
 import re
 import secrets
 import struct
@@ -16,6 +17,8 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 def generate_totp_code(
@@ -1435,6 +1438,506 @@ class WebSessionClient:
             if self._http is None:
                 client.close()
 
+    def get_time_project(self, project_id: int) -> dict[str, Any]:
+        """Fetch a single time-tracking project via GET /v1/api/project/{project_id}."""
+        client = self._get_sync_client()
+        try:
+            url = f"{self.base_url}/v1/api/project/{int(project_id)}"
+            resp = client.get(url, headers=self._get_headers())
+            return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def create_time_project(
+        self,
+        *,
+        name: str,
+        relation_id: int | None = None,
+        active: bool = True,
+        invoice_template_id: int | None = None,
+        invoicing_method: int = 1,
+        group_by: int = 0,
+        description_type: int = 1,
+        hourly_rate: float = 0.0,
+        hourly_rate_in_ex: str = "EX",
+        hourly_rate_ledger_id: int | None = None,
+        hourly_rate_vat_code: str | None = None,
+        km_rate: float = 0.0,
+        km_rate_in_ex: str = "EX",
+        km_rate_ledger_id: int | None = None,
+        km_rate_vat_code: str | None = None,
+        cost_center_id: int = 0,
+        notes: str = "",
+        limit_enabled: bool = False,
+        limit_hours: float = 0.0,
+        limit_type: int = 0,
+        alert_percentage: int = 0,
+        alert_user_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Create a time project via POST /v1/api/project."""
+        client = self._get_sync_client()
+        try:
+            hdrs = self._get_headers()
+            need_ledgers = (
+                hourly_rate_ledger_id is not None and hourly_rate_ledger_id < 1_000_000
+            ) or (km_rate_ledger_id is not None and km_rate_ledger_id < 1_000_000)
+            ledgers: list[dict[str, Any]] = []
+            if need_ledgers:
+                gbr_resp = self._check_response(
+                    client.get(
+                        f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL",
+                        headers=hdrs,
+                    )
+                )
+                if isinstance(gbr_resp, list):
+                    ledgers = gbr_resp
+
+            resolved_hr_ledger = hourly_rate_ledger_id
+            if resolved_hr_ledger is not None and resolved_hr_ledger < 1_000_000:
+                resolved_hr_ledger = resolve_revenue_ledger_id(
+                    ledgers,
+                    ledger_id=hourly_rate_ledger_id,
+                    vat_code=hourly_rate_vat_code or "BI_EU_VERK_D",
+                )
+
+            resolved_km_ledger = km_rate_ledger_id
+            if resolved_km_ledger is not None and resolved_km_ledger < 1_000_000:
+                resolved_km_ledger = resolve_revenue_ledger_id(
+                    ledgers,
+                    ledger_id=km_rate_ledger_id,
+                    vat_code=km_rate_vat_code or "BI_EU_VERK_D",
+                )
+
+            payload: dict[str, Any] = {
+                "id": 0,
+                "naam": str(name),
+                "actief": bool(active),
+                "relatieId": int(relation_id) if relation_id is not None else 0,
+                "factuurSjabloonId": (
+                    int(invoice_template_id) if invoice_template_id is not None else 0
+                ),
+                "factuurWijze": int(invoicing_method),
+                "factuurGroeperenOp": int(group_by),
+                "factuurOmschrijvingType": int(description_type),
+                "uurtarief": float(hourly_rate),
+                "uurtariefInEx": (
+                    "IN" if str(hourly_rate_in_ex).upper() == "IN" else "EX"
+                ),
+                "uurtariefGrootboekrekeningId": (
+                    int(resolved_hr_ledger) if resolved_hr_ledger else 0
+                ),
+                "uurtariefBtwCode": str(hourly_rate_vat_code or ""),
+                "kmtarief": float(km_rate),
+                "kmtariefInEx": "IN" if str(km_rate_in_ex).upper() == "IN" else "EX",
+                "kmtariefGrootboekrekeningId": (
+                    int(resolved_km_ledger) if resolved_km_ledger else 0
+                ),
+                "kmtariefBtwCode": str(km_rate_vat_code or ""),
+                "kostenplaatsId": int(cost_center_id or 0),
+                "notities": str(notes or ""),
+                "stelLimietIn": bool(limit_enabled),
+                "limiet": float(limit_hours),
+                "limietType": int(limit_type),
+                "stuurMeldingBijPercentage": int(alert_percentage),
+                "stuurMeldingGebruikerIds": alert_user_ids or [],
+            }
+            url = f"{self.base_url}/v1/api/project"
+            resp = client.post(url, json=payload, headers=hdrs)
+            result = self._check_response(resp)
+            return (
+                result
+                if isinstance(result, dict)
+                else {"id": result, "project": payload}
+            )
+        finally:
+            if self._http is None:
+                client.close()
+
+    def update_time_project(
+        self,
+        project_id: int,
+        *,
+        name: str | None = None,
+        active: bool | None = None,
+        relation_id: int | None = None,
+        invoice_template_id: int | None = None,
+        invoicing_method: int | None = None,
+        group_by: int | None = None,
+        description_type: int | None = None,
+        hourly_rate: float | None = None,
+        hourly_rate_in_ex: str | None = None,
+        hourly_rate_ledger_id: int | None = None,
+        hourly_rate_vat_code: str | None = None,
+        km_rate: float | None = None,
+        km_rate_in_ex: str | None = None,
+        km_rate_ledger_id: int | None = None,
+        km_rate_vat_code: str | None = None,
+        cost_center_id: int | None = None,
+        notes: str | None = None,
+        limit_enabled: bool | None = None,
+        limit_hours: float | None = None,
+        limit_type: int | None = None,
+        alert_percentage: int | None = None,
+        alert_user_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Update a time project via PUT /v1/api/project."""
+        client = self._get_sync_client()
+        try:
+            hdrs = self._get_headers()
+            current = self.get_time_project(project_id)
+            payload = dict(current)
+
+            need_ledgers = (
+                hourly_rate_ledger_id is not None and hourly_rate_ledger_id < 1_000_000
+            ) or (km_rate_ledger_id is not None and km_rate_ledger_id < 1_000_000)
+            ledgers: list[dict[str, Any]] = []
+            if need_ledgers:
+                gbr_resp = self._check_response(
+                    client.get(
+                        f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL",
+                        headers=hdrs,
+                    )
+                )
+                if isinstance(gbr_resp, list):
+                    ledgers = gbr_resp
+
+            if name is not None:
+                payload["naam"] = str(name)
+            if active is not None:
+                payload["actief"] = bool(active)
+            if relation_id is not None:
+                payload["relatieId"] = int(relation_id)
+            if invoice_template_id is not None:
+                payload["factuurSjabloonId"] = int(invoice_template_id)
+            if invoicing_method is not None:
+                payload["factuurWijze"] = int(invoicing_method)
+            if group_by is not None:
+                payload["factuurGroeperenOp"] = int(group_by)
+            if description_type is not None:
+                payload["factuurOmschrijvingType"] = int(description_type)
+            if hourly_rate is not None:
+                payload["uurtarief"] = float(hourly_rate)
+            if hourly_rate_in_ex is not None:
+                payload["uurtariefInEx"] = (
+                    "IN" if str(hourly_rate_in_ex).upper() == "IN" else "EX"
+                )
+            if hourly_rate_ledger_id is not None:
+                hr_lid = hourly_rate_ledger_id
+                if hr_lid < 1_000_000:
+                    hr_lid = resolve_revenue_ledger_id(
+                        ledgers,
+                        ledger_id=hr_lid,
+                        vat_code=hourly_rate_vat_code
+                        or payload.get("uurtariefBtwCode")
+                        or "BI_EU_VERK_D",
+                    )
+                payload["uurtariefGrootboekrekeningId"] = int(hr_lid)
+            if hourly_rate_vat_code is not None:
+                payload["uurtariefBtwCode"] = str(hourly_rate_vat_code)
+            if km_rate is not None:
+                payload["kmtarief"] = float(km_rate)
+            if km_rate_in_ex is not None:
+                payload["kmtariefInEx"] = (
+                    "IN" if str(km_rate_in_ex).upper() == "IN" else "EX"
+                )
+            if km_rate_ledger_id is not None:
+                km_lid = km_rate_ledger_id
+                if km_lid < 1_000_000:
+                    km_lid = resolve_revenue_ledger_id(
+                        ledgers,
+                        ledger_id=km_lid,
+                        vat_code=km_rate_vat_code
+                        or payload.get("kmtariefBtwCode")
+                        or "BI_EU_VERK_D",
+                    )
+                payload["kmtariefGrootboekrekeningId"] = int(km_lid)
+            if km_rate_vat_code is not None:
+                payload["kmtariefBtwCode"] = str(km_rate_vat_code)
+            if cost_center_id is not None:
+                payload["kostenplaatsId"] = int(cost_center_id)
+            if notes is not None:
+                payload["notities"] = str(notes)
+            if limit_enabled is not None:
+                payload["stelLimietIn"] = bool(limit_enabled)
+            if limit_hours is not None:
+                payload["limiet"] = float(limit_hours)
+            if limit_type is not None:
+                payload["limietType"] = int(limit_type)
+            if alert_percentage is not None:
+                payload["stuurMeldingBijPercentage"] = int(alert_percentage)
+            if alert_user_ids is not None:
+                payload["stuurMeldingGebruikerIds"] = alert_user_ids
+
+            url = f"{self.base_url}/v1/api/project"
+            resp = client.put(url, json=payload, headers=hdrs)
+            result = self._check_response(resp)
+            return (
+                result
+                if isinstance(result, dict)
+                else {"id": int(project_id), "project": payload}
+            )
+        finally:
+            if self._http is None:
+                client.close()
+
+    def get_time_entry(self, entry_id: int) -> dict[str, Any]:
+        """Fetch a single time entry via GET /v1/api/uur/{entry_id}."""
+        client = self._get_sync_client()
+        try:
+            url = f"{self.base_url}/v1/api/uur/{int(entry_id)}"
+            resp = client.get(url, headers=self._get_headers())
+            return self._check_response(resp)
+        finally:
+            if self._http is None:
+                client.close()
+
+    def create_time_entry(
+        self,
+        *,
+        project_id: int,
+        activity_id: int,
+        hours: float,
+        date: str | dict[str, int] | None = None,
+        employee_id: int | None = None,
+        notes: str = "",
+        billable: bool = True,
+        kilometers: float = 0.0,
+    ) -> dict[str, Any]:
+        """Create a time entry via POST /v1/api/uur."""
+        client = self._get_sync_client()
+        try:
+            hdrs = self._get_headers()
+            resolved_emp_id = employee_id
+            if resolved_emp_id is None:
+                try:
+                    users_resp = self._check_response(
+                        client.get(
+                            f"{self.base_url}/v1/api/user/selectlist", headers=hdrs
+                        )
+                    )
+                    if (
+                        isinstance(users_resp, list)
+                        and users_resp
+                        and users_resp[0].get("id")
+                    ):
+                        resolved_emp_id = int(users_resp[0]["id"])
+                except Exception:
+                    resolved_emp_id = 0
+
+            datum_dict = parse_eb_date_dict(date, default_offset_days=0)
+            payload: dict[str, Any] = {
+                "id": 0,
+                "datum": datum_dict,
+                "medewerkerId": int(resolved_emp_id or 0),
+                "projectId": int(project_id),
+                "activiteitId": int(activity_id),
+                "aantal": float(hours),
+                "opmerkingen": str(notes or ""),
+                "declarabel": bool(billable),
+                "kilometers": float(kilometers or 0.0),
+            }
+            url = f"{self.base_url}/v1/api/uur"
+            resp = client.post(url, json=payload, headers=hdrs)
+            result = self._check_response(resp)
+            return (
+                result if isinstance(result, dict) else {"id": result, "entry": payload}
+            )
+        finally:
+            if self._http is None:
+                client.close()
+
+    def update_time_entry(
+        self,
+        entry_id: int,
+        *,
+        date: str | dict[str, int] | None = None,
+        hours: float | None = None,
+        project_id: int | None = None,
+        activity_id: int | None = None,
+        employee_id: int | None = None,
+        notes: str | None = None,
+        billable: bool | None = None,
+        kilometers: float | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing time entry via PUT /v1/api/uur."""
+        client = self._get_sync_client()
+        try:
+            current = self.get_time_entry(entry_id)
+            payload = dict(current)
+            if date is not None:
+                payload["datum"] = parse_eb_date_dict(date)
+            if hours is not None:
+                payload["aantal"] = float(hours)
+            if project_id is not None:
+                payload["projectId"] = int(project_id)
+            if activity_id is not None:
+                payload["activiteitId"] = int(activity_id)
+            if employee_id is not None:
+                payload["medewerkerId"] = int(employee_id)
+            if notes is not None:
+                payload["opmerkingen"] = str(notes)
+            if billable is not None:
+                payload["declarabel"] = bool(billable)
+            if kilometers is not None:
+                payload["kilometers"] = float(kilometers)
+
+            url = f"{self.base_url}/v1/api/uur"
+            resp = client.put(url, json=payload, headers=self._get_headers())
+            result = self._check_response(resp)
+            return (
+                result
+                if isinstance(result, dict)
+                else {"id": int(entry_id), "entry": payload}
+            )
+        finally:
+            if self._http is None:
+                client.close()
+
+    def delete_time_entry(self, entry_id: int) -> dict[str, Any]:
+        """Delete a time entry via DELETE /v1/api/uur/{entry_id}."""
+        client = self._get_sync_client()
+        try:
+            url = f"{self.base_url}/v1/api/uur/{int(entry_id)}"
+            resp = client.delete(url, headers=self._get_headers())
+            res = self._check_response(resp)
+            return {"success": True, "entry_id": int(entry_id), "response": res}
+        finally:
+            if self._http is None:
+                client.close()
+
+    def invoice_time_entries(
+        self,
+        entry_ids: list[int],
+        *,
+        date: str | None = None,
+        group_by: int = 4,
+        description_type: int = 2,
+        process_directly: bool = True,
+        send_directly: bool = False,
+        reference: str | None = None,
+        invoice_text: str | None = None,
+    ) -> dict[str, Any]:
+        """Convert time entries into an invoice via POST /v1/api/uur/factureren."""
+        if date:
+            date_str = format_eb_date_dict(parse_eb_date_dict(date)) or str(date)[:10]
+        else:
+            date_str = dt.date.today().isoformat()
+
+        payload: dict[str, Any] = {
+            "ids": [int(eid) for eid in entry_ids],
+            "groeperenOp": int(group_by),
+            "datum": date_str,
+            "omschrijvingType": int(description_type),
+            "verwerkDirect": bool(process_directly),
+            "verstuurDirect": bool(send_directly),
+        }
+        url = f"{self.base_url}/v1/api/uur/factureren"
+        client = self._get_sync_client()
+        try:
+            resp = client.post(url, json=payload, headers=self._get_headers())
+            result = self._check_response(resp)
+            if isinstance(result, dict):
+                error_count = result.get("errorCount", 0)
+                error_messages = result.get("errorMessages") or []
+                if error_count > 0 or error_messages:
+                    raise WebSessionError(
+                        f"Failed to invoice time entries: {', '.join(str(m) for m in error_messages) or 'errorCount > 0'}"
+                    )
+
+            created_ids: list[int] = []
+            if isinstance(result, dict) and isinstance(result.get("ids"), list):
+                created_ids = [int(i) for i in result["ids"]]
+
+            updated_invoices: list[dict[str, Any]] = []
+            if (reference is not None or invoice_text is not None) and created_ids:
+                for inv_id in created_ids:
+                    upd = self.update_invoice(
+                        invoice_id=inv_id,
+                        reference=reference,
+                        invoice_text=invoice_text,
+                    )
+                    updated_invoices.append(upd)
+
+            return {
+                "success": True,
+                "invoice_ids": created_ids,
+                "reference": reference,
+                "invoice_text": invoice_text,
+                "response": result,
+                "updated_invoices": updated_invoices,
+            }
+        finally:
+            if self._http is None:
+                client.close()
+
+    def update_invoice(
+        self,
+        invoice_id: int,
+        *,
+        reference: str | None = None,
+        invoice_text: str | None = None,
+        date: str | None = None,
+        payment_term_days: int | None = None,
+        template_id: int | None = None,
+        internal_note: str | None = None,
+    ) -> dict[str, Any]:
+        """Update invoice header fields via PUT /v1/api/factuur/model and trigger PDF regeneration."""
+        client = self._get_sync_client()
+        try:
+            hdrs = self._get_headers()
+            get_url = f"{self.base_url}/v1/api/factuur/{int(invoice_id)}"
+            resp = client.get(get_url, headers=hdrs)
+            raw_data = self._check_response(resp)
+
+            factuur_obj = (
+                dict(raw_data["factuur"])
+                if isinstance(raw_data, dict) and "factuur" in raw_data
+                else dict(raw_data)
+            )
+
+            if reference is not None:
+                factuur_obj["kenmerk"] = str(reference)
+            if invoice_text is not None:
+                factuur_obj["factuurtekst"] = str(invoice_text)
+            if date is not None:
+                factuur_obj["datum"] = parse_eb_date_dict(date)
+            if payment_term_days is not None:
+                factuur_obj["betalingstermijn"] = int(payment_term_days)
+            if template_id is not None:
+                factuur_obj["sjabloonId"] = int(template_id)
+            if internal_note is not None:
+                factuur_obj["notitie"] = str(internal_note)
+
+            model_payload = {
+                "factuur": factuur_obj,
+                "factuurItems": {"insert": [], "update": [], "delete": []},
+            }
+            put_url = f"{self.base_url}/v1/api/factuur/model"
+            put_resp = client.put(put_url, json=model_payload, headers=hdrs)
+            model_res = self._check_response(put_resp)
+
+            # Schedule PDF regeneration
+            sched_url = f"{self.base_url}/v1/api/factuur/pdfinvoiceschedule?factuurId={int(invoice_id)}"
+            try:
+                sched_resp = client.get(sched_url, headers=hdrs)
+                self._check_response(sched_resp)
+            except Exception as sched_err:
+                logger.warning(
+                    "Could not schedule PDF invoice regeneration: %s", sched_err
+                )
+
+            return {
+                "success": True,
+                "invoice_id": int(invoice_id),
+                "reference": factuur_obj.get("kenmerk"),
+                "invoice_text": factuur_obj.get("factuurtekst"),
+                "response": model_res,
+            }
+        finally:
+            if self._http is None:
+                client.close()
+
     def _build_quotes_query(
         self,
         *,
@@ -2091,7 +2594,11 @@ class WebSessionClient:
                 "success": True,
                 "invoice_id": int(invoice_id),
                 "recipient_email": str(resolved_recipient),
+                "from_email": str(resolved_from_email),
+                "from_name": str(resolved_from_name),
+                "email_template_id": email_template_id,
                 "subject": str(resolved_subject),
+                "body": str(resolved_body),
                 "attach_ubl": bool(attach_ubl),
                 "response": result,
             }
@@ -2356,6 +2863,461 @@ class WebSessionClient:
             "summary": summary,
             "rows": all_rows,
         }
+
+    async def async_get_time_project(self, project_id: int) -> dict[str, Any]:
+        """Fetch a single time project via GET /v1/api/project/{project_id}."""
+        url = f"{self.base_url}/v1/api/project/{int(project_id)}"
+        async with self._get_async_client() as client:
+            resp = await client.get(url)
+            return self._check_response(resp)
+
+    async def async_create_time_project(
+        self,
+        *,
+        name: str,
+        relation_id: int | None = None,
+        active: bool = True,
+        invoice_template_id: int | None = None,
+        invoicing_method: int = 1,
+        group_by: int = 0,
+        description_type: int = 1,
+        hourly_rate: float = 0.0,
+        hourly_rate_in_ex: str = "EX",
+        hourly_rate_ledger_id: int | None = None,
+        hourly_rate_vat_code: str | None = None,
+        km_rate: float = 0.0,
+        km_rate_in_ex: str = "EX",
+        km_rate_ledger_id: int | None = None,
+        km_rate_vat_code: str | None = None,
+        cost_center_id: int = 0,
+        notes: str = "",
+        limit_enabled: bool = False,
+        limit_hours: float = 0.0,
+        limit_type: int = 0,
+        alert_percentage: int = 0,
+        alert_user_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Create a time project via POST /v1/api/project."""
+        need_ledgers = (
+            hourly_rate_ledger_id is not None and hourly_rate_ledger_id < 1_000_000
+        ) or (km_rate_ledger_id is not None and km_rate_ledger_id < 1_000_000)
+        ledgers: list[dict[str, Any]] = []
+        async with self._get_async_client() as client:
+            if need_ledgers:
+                resp_gbr = await client.get(
+                    f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL"
+                )
+                gbr_resp = self._check_response(resp_gbr)
+                if isinstance(gbr_resp, list):
+                    ledgers = gbr_resp
+
+            resolved_hr_ledger = hourly_rate_ledger_id
+            if resolved_hr_ledger is not None and resolved_hr_ledger < 1_000_000:
+                resolved_hr_ledger = resolve_revenue_ledger_id(
+                    ledgers,
+                    ledger_id=hourly_rate_ledger_id,
+                    vat_code=hourly_rate_vat_code or "BI_EU_VERK_D",
+                )
+
+            resolved_km_ledger = km_rate_ledger_id
+            if resolved_km_ledger is not None and resolved_km_ledger < 1_000_000:
+                resolved_km_ledger = resolve_revenue_ledger_id(
+                    ledgers,
+                    ledger_id=km_rate_ledger_id,
+                    vat_code=km_rate_vat_code or "BI_EU_VERK_D",
+                )
+
+            payload: dict[str, Any] = {
+                "id": 0,
+                "naam": str(name),
+                "actief": bool(active),
+                "relatieId": int(relation_id) if relation_id is not None else 0,
+                "factuurSjabloonId": (
+                    int(invoice_template_id) if invoice_template_id is not None else 0
+                ),
+                "factuurWijze": int(invoicing_method),
+                "factuurGroeperenOp": int(group_by),
+                "factuurOmschrijvingType": int(description_type),
+                "uurtarief": float(hourly_rate),
+                "uurtariefInEx": (
+                    "IN" if str(hourly_rate_in_ex).upper() == "IN" else "EX"
+                ),
+                "uurtariefGrootboekrekeningId": (
+                    int(resolved_hr_ledger) if resolved_hr_ledger else 0
+                ),
+                "uurtariefBtwCode": str(hourly_rate_vat_code or ""),
+                "kmtarief": float(km_rate),
+                "kmtariefInEx": "IN" if str(km_rate_in_ex).upper() == "IN" else "EX",
+                "kmtariefGrootboekrekeningId": (
+                    int(resolved_km_ledger) if resolved_km_ledger else 0
+                ),
+                "kmtariefBtwCode": str(km_rate_vat_code or ""),
+                "kostenplaatsId": int(cost_center_id or 0),
+                "notities": str(notes or ""),
+                "stelLimietIn": bool(limit_enabled),
+                "limiet": float(limit_hours),
+                "limietType": int(limit_type),
+                "stuurMeldingBijPercentage": int(alert_percentage),
+                "stuurMeldingGebruikerIds": alert_user_ids or [],
+            }
+            url = f"{self.base_url}/v1/api/project"
+            resp = await client.post(url, json=payload)
+            result = self._check_response(resp)
+            return (
+                result
+                if isinstance(result, dict)
+                else {"id": result, "project": payload}
+            )
+
+    async def async_update_time_project(
+        self,
+        project_id: int,
+        *,
+        name: str | None = None,
+        active: bool | None = None,
+        relation_id: int | None = None,
+        invoice_template_id: int | None = None,
+        invoicing_method: int | None = None,
+        group_by: int | None = None,
+        description_type: int | None = None,
+        hourly_rate: float | None = None,
+        hourly_rate_in_ex: str | None = None,
+        hourly_rate_ledger_id: int | None = None,
+        hourly_rate_vat_code: str | None = None,
+        km_rate: float | None = None,
+        km_rate_in_ex: str | None = None,
+        km_rate_ledger_id: int | None = None,
+        km_rate_vat_code: str | None = None,
+        cost_center_id: int | None = None,
+        notes: str | None = None,
+        limit_enabled: bool | None = None,
+        limit_hours: float | None = None,
+        limit_type: int | None = None,
+        alert_percentage: int | None = None,
+        alert_user_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Update a time project via PUT /v1/api/project."""
+        current = await self.async_get_time_project(project_id)
+        payload = dict(current)
+
+        need_ledgers = (
+            hourly_rate_ledger_id is not None and hourly_rate_ledger_id < 1_000_000
+        ) or (km_rate_ledger_id is not None and km_rate_ledger_id < 1_000_000)
+        ledgers: list[dict[str, Any]] = []
+        async with self._get_async_client() as client:
+            if need_ledgers:
+                resp_gbr = await client.get(
+                    f"{self.base_url}/v1/api/grootboekrekening/selectlist/actief/VWBAL"
+                )
+                gbr_resp = self._check_response(resp_gbr)
+                if isinstance(gbr_resp, list):
+                    ledgers = gbr_resp
+
+            if name is not None:
+                payload["naam"] = str(name)
+            if active is not None:
+                payload["actief"] = bool(active)
+            if relation_id is not None:
+                payload["relatieId"] = int(relation_id)
+            if invoice_template_id is not None:
+                payload["factuurSjabloonId"] = int(invoice_template_id)
+            if invoicing_method is not None:
+                payload["factuurWijze"] = int(invoicing_method)
+            if group_by is not None:
+                payload["factuurGroeperenOp"] = int(group_by)
+            if description_type is not None:
+                payload["factuurOmschrijvingType"] = int(description_type)
+            if hourly_rate is not None:
+                payload["uurtarief"] = float(hourly_rate)
+            if hourly_rate_in_ex is not None:
+                payload["uurtariefInEx"] = (
+                    "IN" if str(hourly_rate_in_ex).upper() == "IN" else "EX"
+                )
+            if hourly_rate_ledger_id is not None:
+                hr_lid = hourly_rate_ledger_id
+                if hr_lid < 1_000_000:
+                    hr_lid = resolve_revenue_ledger_id(
+                        ledgers,
+                        ledger_id=hr_lid,
+                        vat_code=hourly_rate_vat_code
+                        or payload.get("uurtariefBtwCode")
+                        or "BI_EU_VERK_D",
+                    )
+                payload["uurtariefGrootboekrekeningId"] = int(hr_lid)
+            if hourly_rate_vat_code is not None:
+                payload["uurtariefBtwCode"] = str(hourly_rate_vat_code)
+            if km_rate is not None:
+                payload["kmtarief"] = float(km_rate)
+            if km_rate_in_ex is not None:
+                payload["kmtariefInEx"] = (
+                    "IN" if str(km_rate_in_ex).upper() == "IN" else "EX"
+                )
+            if km_rate_ledger_id is not None:
+                km_lid = km_rate_ledger_id
+                if km_lid < 1_000_000:
+                    km_lid = resolve_revenue_ledger_id(
+                        ledgers,
+                        ledger_id=km_lid,
+                        vat_code=km_rate_vat_code
+                        or payload.get("kmtariefBtwCode")
+                        or "BI_EU_VERK_D",
+                    )
+                payload["kmtariefGrootboekrekeningId"] = int(km_lid)
+            if km_rate_vat_code is not None:
+                payload["kmtariefBtwCode"] = str(km_rate_vat_code)
+            if cost_center_id is not None:
+                payload["kostenplaatsId"] = int(cost_center_id)
+            if notes is not None:
+                payload["notities"] = str(notes)
+            if limit_enabled is not None:
+                payload["stelLimietIn"] = bool(limit_enabled)
+            if limit_hours is not None:
+                payload["limiet"] = float(limit_hours)
+            if limit_type is not None:
+                payload["limietType"] = int(limit_type)
+            if alert_percentage is not None:
+                payload["stuurMeldingBijPercentage"] = int(alert_percentage)
+            if alert_user_ids is not None:
+                payload["stuurMeldingGebruikerIds"] = alert_user_ids
+
+            url = f"{self.base_url}/v1/api/project"
+            resp = await client.put(url, json=payload)
+            result = self._check_response(resp)
+            return (
+                result
+                if isinstance(result, dict)
+                else {"id": int(project_id), "project": payload}
+            )
+
+    async def async_get_time_entry(self, entry_id: int) -> dict[str, Any]:
+        """Fetch a single time entry via GET /v1/api/uur/{entry_id}."""
+        url = f"{self.base_url}/v1/api/uur/{int(entry_id)}"
+        async with self._get_async_client() as client:
+            resp = await client.get(url)
+            return self._check_response(resp)
+
+    async def async_create_time_entry(
+        self,
+        *,
+        project_id: int,
+        activity_id: int,
+        hours: float,
+        date: str | dict[str, int] | None = None,
+        employee_id: int | None = None,
+        notes: str = "",
+        billable: bool = True,
+        kilometers: float = 0.0,
+    ) -> dict[str, Any]:
+        """Create a time entry via POST /v1/api/uur."""
+        resolved_emp_id = employee_id
+        async with self._get_async_client() as client:
+            if resolved_emp_id is None:
+                try:
+                    users_resp = self._check_response(
+                        await client.get(f"{self.base_url}/v1/api/user/selectlist")
+                    )
+                    if (
+                        isinstance(users_resp, list)
+                        and users_resp
+                        and users_resp[0].get("id")
+                    ):
+                        resolved_emp_id = int(users_resp[0]["id"])
+                except Exception:
+                    resolved_emp_id = 0
+
+            datum_dict = parse_eb_date_dict(date, default_offset_days=0)
+            payload: dict[str, Any] = {
+                "id": 0,
+                "datum": datum_dict,
+                "medewerkerId": int(resolved_emp_id or 0),
+                "projectId": int(project_id),
+                "activiteitId": int(activity_id),
+                "aantal": float(hours),
+                "opmerkingen": str(notes or ""),
+                "declarabel": bool(billable),
+                "kilometers": float(kilometers or 0.0),
+            }
+            url = f"{self.base_url}/v1/api/uur"
+            resp = await client.post(url, json=payload)
+            result = self._check_response(resp)
+            return (
+                result if isinstance(result, dict) else {"id": result, "entry": payload}
+            )
+
+    async def async_update_time_entry(
+        self,
+        entry_id: int,
+        *,
+        date: str | dict[str, int] | None = None,
+        hours: float | None = None,
+        project_id: int | None = None,
+        activity_id: int | None = None,
+        employee_id: int | None = None,
+        notes: str | None = None,
+        billable: bool | None = None,
+        kilometers: float | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing time entry via PUT /v1/api/uur."""
+        current = await self.async_get_time_entry(entry_id)
+        payload = dict(current)
+        if date is not None:
+            payload["datum"] = parse_eb_date_dict(date)
+        if hours is not None:
+            payload["aantal"] = float(hours)
+        if project_id is not None:
+            payload["projectId"] = int(project_id)
+        if activity_id is not None:
+            payload["activiteitId"] = int(activity_id)
+        if employee_id is not None:
+            payload["medewerkerId"] = int(employee_id)
+        if notes is not None:
+            payload["opmerkingen"] = str(notes)
+        if billable is not None:
+            payload["declarabel"] = bool(billable)
+        if kilometers is not None:
+            payload["kilometers"] = float(kilometers)
+
+        url = f"{self.base_url}/v1/api/uur"
+        async with self._get_async_client() as client:
+            resp = await client.put(url, json=payload)
+            result = self._check_response(resp)
+            return (
+                result
+                if isinstance(result, dict)
+                else {"id": int(entry_id), "entry": payload}
+            )
+
+    async def async_delete_time_entry(self, entry_id: int) -> dict[str, Any]:
+        """Delete a time entry via DELETE /v1/api/uur/{entry_id}."""
+        url = f"{self.base_url}/v1/api/uur/{int(entry_id)}"
+        async with self._get_async_client() as client:
+            resp = await client.delete(url)
+            res = self._check_response(resp)
+            return {"success": True, "entry_id": int(entry_id), "response": res}
+
+    async def async_invoice_time_entries(
+        self,
+        entry_ids: list[int],
+        *,
+        date: str | None = None,
+        group_by: int = 4,
+        description_type: int = 2,
+        process_directly: bool = True,
+        send_directly: bool = False,
+        reference: str | None = None,
+        invoice_text: str | None = None,
+    ) -> dict[str, Any]:
+        """Convert time entries into an invoice via POST /v1/api/uur/factureren."""
+        if date:
+            date_str = format_eb_date_dict(parse_eb_date_dict(date)) or str(date)[:10]
+        else:
+            date_str = dt.date.today().isoformat()
+
+        payload: dict[str, Any] = {
+            "ids": [int(eid) for eid in entry_ids],
+            "groeperenOp": int(group_by),
+            "datum": date_str,
+            "omschrijvingType": int(description_type),
+            "verwerkDirect": bool(process_directly),
+            "verstuurDirect": bool(send_directly),
+        }
+        url = f"{self.base_url}/v1/api/uur/factureren"
+        async with self._get_async_client() as client:
+            resp = await client.post(url, json=payload)
+            result = self._check_response(resp)
+
+        if isinstance(result, dict):
+            error_count = result.get("errorCount", 0)
+            error_messages = result.get("errorMessages") or []
+            if error_count > 0 or error_messages:
+                raise WebSessionError(
+                    f"Failed to invoice time entries: {', '.join(str(m) for m in error_messages) or 'errorCount > 0'}"
+                )
+
+        created_ids: list[int] = []
+        if isinstance(result, dict) and isinstance(result.get("ids"), list):
+            created_ids = [int(i) for i in result["ids"]]
+
+        updated_invoices: list[dict[str, Any]] = []
+        if (reference is not None or invoice_text is not None) and created_ids:
+            for inv_id in created_ids:
+                upd = await self.async_update_invoice(
+                    invoice_id=inv_id,
+                    reference=reference,
+                    invoice_text=invoice_text,
+                )
+                updated_invoices.append(upd)
+
+        return {
+            "success": True,
+            "invoice_ids": created_ids,
+            "reference": reference,
+            "invoice_text": invoice_text,
+            "response": result,
+            "updated_invoices": updated_invoices,
+        }
+
+    async def async_update_invoice(
+        self,
+        invoice_id: int,
+        *,
+        reference: str | None = None,
+        invoice_text: str | None = None,
+        date: str | None = None,
+        payment_term_days: int | None = None,
+        template_id: int | None = None,
+        internal_note: str | None = None,
+    ) -> dict[str, Any]:
+        """Update invoice header fields via PUT /v1/api/factuur/model and trigger PDF regeneration."""
+        async with self._get_async_client() as client:
+            get_url = f"{self.base_url}/v1/api/factuur/{int(invoice_id)}"
+            resp = await client.get(get_url)
+            raw_data = self._check_response(resp)
+
+            factuur_obj = (
+                dict(raw_data["factuur"])
+                if isinstance(raw_data, dict) and "factuur" in raw_data
+                else dict(raw_data)
+            )
+
+            if reference is not None:
+                factuur_obj["kenmerk"] = str(reference)
+            if invoice_text is not None:
+                factuur_obj["factuurtekst"] = str(invoice_text)
+            if date is not None:
+                factuur_obj["datum"] = parse_eb_date_dict(date)
+            if payment_term_days is not None:
+                factuur_obj["betalingstermijn"] = int(payment_term_days)
+            if template_id is not None:
+                factuur_obj["sjabloonId"] = int(template_id)
+            if internal_note is not None:
+                factuur_obj["notitie"] = str(internal_note)
+
+            model_payload = {
+                "factuur": factuur_obj,
+                "factuurItems": {"insert": [], "update": [], "delete": []},
+            }
+            put_url = f"{self.base_url}/v1/api/factuur/model"
+            put_resp = await client.put(put_url, json=model_payload)
+            model_res = self._check_response(put_resp)
+
+            # Schedule PDF regeneration
+            sched_url = f"{self.base_url}/v1/api/factuur/pdfinvoiceschedule?factuurId={int(invoice_id)}"
+            try:
+                sched_resp = await client.get(sched_url)
+                self._check_response(sched_resp)
+            except Exception as sched_err:
+                logger.warning(
+                    "Could not schedule PDF invoice regeneration: %s", sched_err
+                )
+
+            return {
+                "success": True,
+                "invoice_id": int(invoice_id),
+                "reference": factuur_obj.get("kenmerk"),
+                "invoice_text": factuur_obj.get("factuurtekst"),
+                "response": model_res,
+            }
 
     async def async_get_quote_metadata(self) -> dict[str, Any]:
         """Async version of get_quote_metadata."""
@@ -2933,7 +3895,11 @@ class WebSessionClient:
             "success": True,
             "invoice_id": int(invoice_id),
             "recipient_email": str(resolved_recipient),
+            "from_email": str(resolved_from_email),
+            "from_name": str(resolved_from_name),
+            "email_template_id": email_template_id,
             "subject": str(resolved_subject),
+            "body": str(resolved_body),
             "attach_ubl": bool(attach_ubl),
             "response": result,
         }

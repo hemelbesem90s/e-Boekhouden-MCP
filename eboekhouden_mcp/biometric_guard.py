@@ -148,19 +148,55 @@ def format_write_prompt(tool_name: str, arguments: dict[str, Any]) -> str:
             return f"e-Boekhouden MCP: Approve POST Mutation of EUR {_format_currency(amount_val)} on Ledger {ledger_id}?"
         return f"e-Boekhouden MCP: Approve POST Mutation on Ledger {ledger_id}?"
 
+    # Time Tracking & Invoicing Write Tools
+    if tool_name == "create_time_project":
+        name = args.get("name", "[Project]")
+        return f"e-Boekhouden MCP: Approve POST Time Project '{name}'?"
+
+    if tool_name == "update_time_project":
+        pid = args.get("project_id", "[Project]")
+        inactive = " (deactivate)" if args.get("active") is False else ""
+        return f"e-Boekhouden MCP: Approve PUT Time Project ID {pid}{inactive}?"
+
+    if tool_name == "create_time_entry":
+        hours = args.get("hours", "?")
+        pid = args.get("project_id", "[Project]")
+        return (
+            f"e-Boekhouden MCP: Approve POST Time Entry ({hours}h for Project {pid})?"
+        )
+
+    if tool_name == "update_time_entry":
+        eid = args.get("entry_id", "[Entry]")
+        hours_str = f" ({args.get('hours')}h)" if "hours" in args else ""
+        return f"e-Boekhouden MCP: Approve PUT Time Entry ID {eid}{hours_str}?"
+
+    if tool_name == "invoice_time_entries":
+        entry_ids = args.get("entry_ids") or args.get("ids") or []
+        count = len(entry_ids) if isinstance(entry_ids, list) else "?"
+        return f"e-Boekhouden MCP: Approve Invoicing {count} Time Entries?"
+
+    if tool_name == "update_invoice":
+        inv_id = args.get("invoice_id", "[Invoice]")
+        ref = args.get("reference")
+        ref_str = f" (Reference: {ref})" if ref else ""
+        return f"e-Boekhouden MCP: Approve PUT Invoice Header for Invoice ID {inv_id}{ref_str}?"
+
     # Deletions
     if tool_name.startswith("delete_"):
         entity_id = args.get(
             "id",
             args.get(
-                "quote_id",
+                "entry_id",
                 args.get(
-                    "relation_id",
+                    "quote_id",
                     args.get(
-                        "product_id",
+                        "relation_id",
                         args.get(
-                            "cost_center_id",
-                            args.get("member_id", args.get("ledger_id", "Unknown")),
+                            "product_id",
+                            args.get(
+                                "cost_center_id",
+                                args.get("member_id", args.get("ledger_id", "Unknown")),
+                            ),
                         ),
                     ),
                 ),
