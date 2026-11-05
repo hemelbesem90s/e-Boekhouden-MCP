@@ -1729,13 +1729,12 @@ class WebSessionClient:
             payload: dict[str, Any] = {
                 "id": 0,
                 "datum": datum_dict,
-                "medewerkerId": int(resolved_emp_id or 0),
+                "gebruikerId": int(resolved_emp_id or 0),
                 "projectId": int(project_id),
                 "activiteitId": int(activity_id),
-                "aantal": float(hours),
+                "aantalUren": float(hours),
                 "opmerkingen": str(notes or ""),
-                "declarabel": bool(billable),
-                "kilometers": float(kilometers or 0.0),
+                "aantalKilometers": float(kilometers or 0.0),
             }
             url = f"{self.base_url}/v1/api/uur"
             resp = client.post(url, json=payload, headers=hdrs)
@@ -1768,19 +1767,20 @@ class WebSessionClient:
             if date is not None:
                 payload["datum"] = parse_eb_date_dict(date)
             if hours is not None:
-                payload["aantal"] = float(hours)
+                payload["aantalUren"] = float(hours)
+                payload.pop("aantal", None)
             if project_id is not None:
                 payload["projectId"] = int(project_id)
             if activity_id is not None:
                 payload["activiteitId"] = int(activity_id)
             if employee_id is not None:
-                payload["medewerkerId"] = int(employee_id)
+                payload["gebruikerId"] = int(employee_id)
+                payload.pop("medewerkerId", None)
             if notes is not None:
                 payload["opmerkingen"] = str(notes)
-            if billable is not None:
-                payload["declarabel"] = bool(billable)
             if kilometers is not None:
-                payload["kilometers"] = float(kilometers)
+                payload["aantalKilometers"] = float(kilometers)
+                payload.pop("kilometers", None)
 
             url = f"{self.base_url}/v1/api/uur"
             resp = client.put(url, json=payload, headers=self._get_headers())
@@ -3129,13 +3129,12 @@ class WebSessionClient:
             payload: dict[str, Any] = {
                 "id": 0,
                 "datum": datum_dict,
-                "medewerkerId": int(resolved_emp_id or 0),
+                "gebruikerId": int(resolved_emp_id or 0),
                 "projectId": int(project_id),
                 "activiteitId": int(activity_id),
-                "aantal": float(hours),
+                "aantalUren": float(hours),
                 "opmerkingen": str(notes or ""),
-                "declarabel": bool(billable),
-                "kilometers": float(kilometers or 0.0),
+                "aantalKilometers": float(kilometers or 0.0),
             }
             url = f"{self.base_url}/v1/api/uur"
             resp = await client.post(url, json=payload)
@@ -3163,19 +3162,20 @@ class WebSessionClient:
         if date is not None:
             payload["datum"] = parse_eb_date_dict(date)
         if hours is not None:
-            payload["aantal"] = float(hours)
+            payload["aantalUren"] = float(hours)
+            payload.pop("aantal", None)
         if project_id is not None:
             payload["projectId"] = int(project_id)
         if activity_id is not None:
             payload["activiteitId"] = int(activity_id)
         if employee_id is not None:
-            payload["medewerkerId"] = int(employee_id)
+            payload["gebruikerId"] = int(employee_id)
+            payload.pop("medewerkerId", None)
         if notes is not None:
             payload["opmerkingen"] = str(notes)
-        if billable is not None:
-            payload["declarabel"] = bool(billable)
         if kilometers is not None:
-            payload["kilometers"] = float(kilometers)
+            payload["aantalKilometers"] = float(kilometers)
+            payload.pop("kilometers", None)
 
         url = f"{self.base_url}/v1/api/uur"
         async with self._get_async_client() as client:

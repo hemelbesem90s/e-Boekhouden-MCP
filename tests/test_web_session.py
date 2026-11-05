@@ -2169,7 +2169,8 @@ async def test_time_tracking_and_invoice_update_write_tools():
             for p in recorded_posts
             if "/v1/api/uur" in p["url"] and not p["url"].endswith("factureren")
         ][-1]
-        assert post_uur["body"]["medewerkerId"] == 841802
+        assert post_uur["body"]["gebruikerId"] == 841802
+        assert post_uur["body"]["aantalUren"] == 3.5
         assert post_uur["body"]["datum"] == {"year": 2026, "month": 11, "day": 5}
 
         new_entry_async = await client_async.async_create_time_entry(
@@ -2186,14 +2187,14 @@ async def test_time_tracking_and_invoice_update_write_tools():
             hours=4.0,
             notes="Revised CAD models",
         )
-        assert upd_entry["aantal"] == 4.0
+        assert upd_entry["aantalUren"] == 4.0
         assert upd_entry["opmerkingen"] == "Revised CAD models"
 
         upd_entry_async = await client_async.async_update_time_entry(
             entry_id=28047685,
             hours=5.0,
         )
-        assert upd_entry_async["aantal"] == 5.0
+        assert upd_entry_async["aantalUren"] == 5.0
 
         # 7. Sync & Async delete_time_entry
         del_sync = client_sync.delete_time_entry(28047685)
@@ -2316,7 +2317,7 @@ async def test_time_tracking_and_invoice_update_write_tools():
             {"entry_id": 28047685, "hours": 6.0},
         )
         assert res_ue["success"] is True
-        assert res_ue["entry"]["aantal"] == 6.0
+        assert res_ue["entry"]["aantalUren"] == 6.0
 
         # DeleteTimeEntryTool
         tool_de = DeleteTimeEntryTool(client_async)
