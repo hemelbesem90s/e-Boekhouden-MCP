@@ -842,7 +842,7 @@ class WebSessionClient:
                         and err_data.get("errorType") == "Lockout"
                     ):
                         mins_val = err_data.get("lockoutMinutes")
-                except Exception:
+                except Exception:  # nosec B110
                     pass
             if mins_val is None:
                 m_lock = re.search(r"(\d+)\s*(?:minuten|minute)", body, re.IGNORECASE)
@@ -857,7 +857,7 @@ class WebSessionClient:
             parsed = response.json()
             if isinstance(parsed, dict):
                 json_data = parsed
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         if json_data is not None:
