@@ -81,6 +81,7 @@ The server registers 83 tools across four architectural layers. The default surf
 | `attach_file_to_quote` | Attach a Digital Archive file (such as a branded PDF offer) to a quote (`koppelType='OF'`). | Opt-in Write |
 | `delete_quote` | Delete a quote by ID via `DELETE /v1/api/offerte/{quote_id}`. | Opt-in Write |
 | `send_invoice` | Send an existing invoice by email with template formatting via `POST /v1/api/factuur/mail`. | Opt-in Write |
+| `whitelist_web_session_ip` | Authorize a new IP address in e-Boekhouden using the email verification code or confirmation link. | Read-only |
 
 ## Result behavior
 

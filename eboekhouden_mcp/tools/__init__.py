@@ -99,6 +99,7 @@ from eboekhouden_mcp.web_session.tools import (
     UpdateTimeEntryTool,
     UpdateTimeProjectTool,
     UploadArchiveFileTool,
+    WhitelistWebSessionIpTool,
 )
 
 
@@ -201,6 +202,7 @@ def register_all_tools(registry: ToolRegistry) -> None:
     registry.register(AttachFileToQuoteTool())
     registry.register(DeleteQuoteTool())
     registry.register(SendInvoiceTool())
+    registry.register(WhitelistWebSessionIpTool())
 
 
 __all__ = [

@@ -1939,3 +1939,41 @@ class UpdateInvoiceTool(BaseTool):
             template_id=arguments.get("template_id"),
             internal_note=arguments.get("internal_note"),
         )
+
+
+class WhitelistWebSessionIpInput(ToolSchema):
+    """Input schema for whitelist_web_session_ip."""
+
+    code_or_url: str = Field(
+        description=(
+            "The verification code or full approval URL received via email from e-Boekhouden "
+            "(e.g. 'https://secure20.e-boekhouden.nl/overig/login-whitelist?code=ABC123XYZ' or 'ABC123XYZ') "
+            "to authorize this IP address."
+        )
+    )
+
+
+class WhitelistWebSessionIpTool(BaseTool):
+    """Authorize the current IP address in e-Boekhouden."""
+
+    name = "whitelist_web_session_ip"
+    description = (
+        "Authorize the current IP address in e-Boekhouden by submitting the verification code "
+        "or approval link received by email. Once whitelisted, subsequent web session actions "
+        "and automatic logins proceed without IP block."
+    )
+    input_schema = WhitelistWebSessionIpInput
+
+    def __init__(self, client: WebSessionClient | None = None) -> None:
+        self._web_client = client
+
+    def set_client(self, client: WebSessionClient) -> None:
+        """Inject web session client."""
+        self._web_client = client
+
+    async def execute(
+        self, client: "EBoekhoudenClient", arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        web_client = _resolve_web_client(self._web_client)
+        code_or_url = str(arguments["code_or_url"])
+        return await web_client.async_whitelist_ip(code_or_url)

@@ -133,10 +133,11 @@ flowchart TD
 - `attach_file_to_quote`: Links an uploaded Digital Archive file (such as a branded PDF offer) to a quote via `POST /v1/api/folderkoppel/koppel/item` (`koppelType="OF"`).
 - `delete_quote`: Deletes a quote by ID via `DELETE /v1/api/offerte/{quote_id}`.
 - `send_invoice`: Dispatches an existing invoice by email via `POST /v1/api/factuur/mail` after rendering merge fields (returning sender details, email template ID, and rendered body text), gated by `confirm=True` and biometric verification.
+- `whitelist_web_session_ip`: Authorizes a new or unrecognized IP address in e-Boekhouden via `POST /v1/api/loginwhitelist/whitelist` using the verification code or approval URL sent by email.
 
 ---
 
-## Tool Catalog (83 Tools)
+## Tool Catalog (84 Tools)
 
 | Category | Read Tools (Enabled by Default) | Write Tools (Gated by Double-Lock + Biometrics) |
 |---|---|---|
@@ -152,7 +153,7 @@ flowchart TD
 | **Financial Reports** | `get_trial_balance`, `get_profit_loss`, `get_balance_sheet`, `get_vat_summary`, `get_ar_ap_aging`, `get_ledger_transactions`, `get_cash_flow`, `get_budget_vs_actuals` | — |
 | **AI Bookkeeping Inbox** | `get_dutch_bookkeeping_rules`, `prepare_booking_proposal`, `suggest_transaction_classification` | — |
 | **Digital Archive** | — | `send_file_to_digital_archive` |
-| **Web Session Bridge** | `get_unprocessed_bank_transactions`, `suggest_mutation_for_bank_statement`, `list_archive_folders`, `list_archive_files`, `get_recognized_invoice_model`, `get_mutation_model_by_number`, `list_time_entries`, `list_time_projects`, `list_time_activities`, `list_quotes`, `get_quote` | `attach_file_to_mutation`, `save_web_mutation`, `upload_archive_file`, `move_archive_files`, `create_archive_folder`, `delete_web_mutations`, `create_time_project`, `update_time_project`, `create_time_entry`, `update_time_entry`, `delete_time_entry`, `invoice_time_entries`, `update_invoice`, `create_quote`, `update_quote`, `attach_file_to_quote`, `delete_quote`, `send_invoice` |
+| **Web Session Bridge** | `get_unprocessed_bank_transactions`, `suggest_mutation_for_bank_statement`, `list_archive_folders`, `list_archive_files`, `get_recognized_invoice_model`, `get_mutation_model_by_number`, `list_time_entries`, `list_time_projects`, `list_time_activities`, `list_quotes`, `get_quote`, `whitelist_web_session_ip` | `attach_file_to_mutation`, `save_web_mutation`, `upload_archive_file`, `move_archive_files`, `create_archive_folder`, `delete_web_mutations`, `create_time_project`, `update_time_project`, `create_time_entry`, `update_time_entry`, `delete_time_entry`, `invoice_time_entries`, `update_invoice`, `create_quote`, `update_quote`, `attach_file_to_quote`, `delete_quote`, `send_invoice` |
 
 ---
 

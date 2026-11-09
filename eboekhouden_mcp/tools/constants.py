@@ -85,6 +85,7 @@ WEB_SESSION_TOOL_NAMES = frozenset(
         "delete_time_entry",
         "invoice_time_entries",
         "update_invoice",
+        "whitelist_web_session_ip",
     }
 )
 

@@ -1,7 +1,9 @@
 """Web session bridge module for e-Boekhouden cookie-based session automation."""
 
 from eboekhouden_mcp.web_session.client import (
+    IPVerificationRequiredError,
     SessionExpiredError,
+    TwoFactorRequiredError,
     WebSessionClient,
     WebSessionError,
     build_afschrift_params,
@@ -34,12 +36,15 @@ from eboekhouden_mcp.web_session.tools import (
     SuggestMutationForBankStatementTool,
     UpdateQuoteTool,
     SendInvoiceTool,
+    WhitelistWebSessionIpTool,
 )
 
 __all__ = [
     "WebSessionClient",
     "WebSessionError",
     "SessionExpiredError",
+    "IPVerificationRequiredError",
+    "TwoFactorRequiredError",
     "build_afschrift_params",
     "build_quote_line_payload",
     "format_eb_date_dict",
@@ -68,4 +73,5 @@ __all__ = [
     "AttachFileToQuoteTool",
     "DeleteQuoteTool",
     "SendInvoiceTool",
+    "WhitelistWebSessionIpTool",
 ]

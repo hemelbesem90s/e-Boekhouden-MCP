@@ -316,12 +316,17 @@ def create_server(config: MCPConfig | None = None) -> Server:
             if isinstance(e, WebSessionError) or (
                 name in WEB_SESSION_TOOL_NAMES and isinstance(e, ValueError)
             ):
-                return _error_result(
-                    {
-                        "error": str(e),
-                        "code": "WEB_SESSION_ERROR",
-                    }
-                )
+                payload = {
+                    "error": str(e),
+                    "code": getattr(e, "code", "WEB_SESSION_ERROR"),
+                }
+                if hasattr(e, "verification_code") and e.verification_code:
+                    payload["verification_code"] = e.verification_code
+                if hasattr(e, "verification_url") and e.verification_url:
+                    payload["verification_url"] = e.verification_url
+                if hasattr(e, "details") and e.details:
+                    payload["details"] = e.details
+                return _error_result(payload)
             logger.exception("Unexpected error executing tool %s", name)
             return _error_result(
                 {

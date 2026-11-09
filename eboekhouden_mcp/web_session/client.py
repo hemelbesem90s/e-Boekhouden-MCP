@@ -71,6 +71,42 @@ class SessionExpiredError(WebSessionError):
     """Raised when the e-Boekhouden web session token has expired or is invalid."""
 
 
+class IPVerificationRequiredError(WebSessionError):
+    """Raised when e-Boekhouden blocks web login due to an unrecognized IP address."""
+
+    code: str = "IP_VERIFICATION_REQUIRED"
+
+    def __init__(
+        self,
+        message: str = (
+            "e-Boekhouden web login requires IP address authorization. "
+            "A verification email with an approval link/code has been dispatched to your registered address. "
+            "Please click the confirmation link in the email or approve via whitelist_web_session_ip(code)."
+        ),
+        *,
+        verification_code: str | None = None,
+        verification_url: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.verification_code = verification_code
+        self.verification_url = verification_url
+
+
+class TwoFactorRequiredError(WebSessionError):
+    """Raised when e-Boekhouden web login requires a 2FA verification code."""
+
+    code: str = "TWO_FACTOR_REQUIRED"
+
+    def __init__(
+        self,
+        message: str = (
+            "e-Boekhouden web login requires a 2FA verification code (tweestapsverificatie). "
+            "Provide the TOTP secret or pass two_factor_code to login()."
+        ),
+    ) -> None:
+        super().__init__(message)
+
+
 def _validate_local_file_path(file_path: str | Path) -> Path:
     """Enforce fail-closed local file access (reject cloud drives / UNC paths)."""
     raw_str = str(file_path).strip()
@@ -533,6 +569,21 @@ def build_quote_line_payload(
     return payload
 
 
+def _extract_v1_error_message(html_text: str) -> str | None:
+    """Extract explicit error message from classic V1 HTML response (<span id="ERR_MSG">)."""
+    m = re.search(
+        r'<span id=["\']ERR_MSG["\'][^>]*>(.*?)</span>',
+        html_text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not m:
+        return None
+    raw = m.group(1)
+    cleaned = re.sub(r"<[^>]+>", " ", raw)
+    text = " ".join(cleaned.split()).strip()
+    return text if text else None
+
+
 class _SyncAutoAuthClient:
     """Thin sync wrapper around httpx.Client that auto-authenticates on SessionExpiredError."""
 
@@ -733,9 +784,12 @@ class WebSessionClient:
         """Extract auth-token JWT from Set-Cookie headers, response cookies, or JSON body."""
         all_resps = list(getattr(response, "history", []) or []) + [response]
         for r in reversed(all_resps):
-            tok = r.cookies.get("auth-token")
-            if tok and tok.strip():
-                return tok.strip()
+            try:
+                tok = r.cookies.get("auth-token")
+                if tok and tok.strip():
+                    return tok.strip()
+            except Exception:  # nosec B110
+                pass
             for sc in r.headers.get_list("set-cookie"):
                 m = re.search(r"auth-token=([^;\s]+)", sc)
                 if m and m.group(1).strip():
@@ -775,59 +829,179 @@ class WebSessionClient:
             )
 
         body = response.text
-        if response.status_code not in (200, 201):
-            try:
-                err_data = response.json()
-                if isinstance(err_data, dict):
-                    if err_data.get("errorType") == "Lockout":
-                        mins = err_data.get("lockoutMinutes", "?")
-                        raise WebSessionError(
-                            f"e-Boekhouden login locked out for {mins} minute(s)."
-                        )
-                    msg = (
-                        err_data.get("message")
-                        or err_data.get("code")
-                        or err_data.get("errorType")
+        lower_body = body.lower()
+
+        # 1. Check for lockout
+        if "lockout" in lower_body:
+            mins_val = None
+            if response.status_code not in (200, 201):
+                try:
+                    err_data = response.json()
+                    if (
+                        isinstance(err_data, dict)
+                        and err_data.get("errorType") == "Lockout"
+                    ):
+                        mins_val = err_data.get("lockoutMinutes")
+                except Exception:
+                    pass
+            if mins_val is None:
+                m_lock = re.search(r"(\d+)\s*(?:minuten|minute)", body, re.IGNORECASE)
+                mins_val = m_lock.group(1) if m_lock else "15"
+            raise WebSessionError(
+                f"e-Boekhouden login locked out for {mins_val} minute(s)."
+            )
+
+        # 2. Check for explicit IP verification challenge in JSON responses
+        json_data: dict[str, Any] | None = None
+        try:
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                json_data = parsed
+        except Exception:
+            pass
+
+        if json_data is not None:
+            err_type = str(json_data.get("errorType") or "").lower()
+            msg = str(json_data.get("message") or "")
+            code_val = str(json_data.get("code") or "").upper()
+            if (
+                err_type
+                in (
+                    "ip_verification",
+                    "unauthorized_ip",
+                    "ipverification",
+                    "ipchallenge",
+                    "ip_not_whitelisted",
+                )
+                or code_val
+                in (
+                    "IP_VERIFICATION_REQUIRED",
+                    "NEW_IP",
+                    "SECURITY_IP",
+                    "IP_NOT_WHITELISTED",
+                )
+                or any(
+                    k in msg.lower()
+                    for k in (
+                        "ip-adres",
+                        "nieuw ip",
+                        "onbekend ip",
+                        "whitelist",
+                        "verifieer uw ip",
+                        "bevestig uw ip",
                     )
-                    if msg:
-                        raise WebSessionError(f"e-Boekhouden web login failed: {msg}")
-            except WebSessionError:
-                raise
-            except Exception:  # nosec B110
-                pass
+                )
+                or json_data.get("requiresIpVerification") is True
+                or json_data.get("whitelistRequired") is True
+            ):
+                raise IPVerificationRequiredError(
+                    f"e-Boekhouden web login requires IP address authorization: {msg or 'unrecognized IP address'}. "
+                    "A verification email with an approval link/code has been dispatched to your registered address. "
+                    "Please click the verification link or approve the code via whitelist_web_session_ip(code)."
+                )
+            if (
+                err_type in ("two_factor", "twofactor", "2fa", "tfa")
+                or code_val in ("TWO_FACTOR_REQUIRED", "2FA_REQUIRED", "OTP_REQUIRED")
+                or json_data.get("requiresTwoFactor") is True
+            ):
+                raise TwoFactorRequiredError(
+                    f"e-Boekhouden web login requires 2FA verification: {msg or 'two-factor authentication required'}."
+                )
+
+        # 3. Check for explicit IP challenge in HTML / text responses
+        v1_err = _extract_v1_error_message(body)
+        ip_challenge_patterns = (
+            "ip-adres",
+            "onbekend ip",
+            "nieuw ip",
+            "login-whitelist",
+            "bevestig uw ip",
+            "verifieer uw ip",
+            "ongeautoriseerd ip",
+            "locatie die we nog niet kennen",
+            "vanaf een locatie die we",
+            "bevestigen dat jij het bent",
+            "bevestigen dat u het bent",
+        )
+        if any(k in lower_body for k in ip_challenge_patterns) or (
+            v1_err and any(k in v1_err.lower() for k in ip_challenge_patterns)
+        ):
+            err_detail = v1_err or "Nieuw of onbekend IP-adres/locatie gedetecteerd"
+            raise IPVerificationRequiredError(
+                f"e-Boekhouden web login blocked ({err_detail}). "
+                "A verification email with an authorization link has been sent to your registered address. "
+                "Approve the IP address by clicking the email link or passing the code to whitelist_web_session_ip(code)."
+            )
+
+        # 4. Check for 2FA in HTML
+        if "tweestapsverificatie" in lower_body or "app-two-factor-form" in lower_body:
+            raise TwoFactorRequiredError(
+                "e-Boekhouden web login requires 2FA verification code (tweestapsverificatie)."
+            )
+
+        # 5. Handle non-200 responses
+        if response.status_code not in (200, 201):
+            if json_data is not None:
+                err_text = str(
+                    json_data.get("message")
+                    or json_data.get("code")
+                    or json_data.get("errorType")
+                    or ""
+                ).strip()
+                if err_text:
+                    if (
+                        "onjuist" in err_text.lower()
+                        or "gebruikersnaam" in err_text.lower()
+                    ):
+                        raise WebSessionError(
+                            f"e-Boekhouden web login failed: {err_text} "
+                            "(Note: If logging in from a new IP address or location for the first time in 30 days, "
+                            "e-Boekhouden may block access and dispatch an email verification link to authorize this IP address. "
+                            "Check your email for an IP confirmation message and approve the link or code before retrying.)"
+                        )
+                    raise WebSessionError(f"e-Boekhouden web login failed: {err_text}")
             raise WebSessionError(
                 f"e-Boekhouden web login failed (HTTP {response.status_code}): {body[:200]}"
             )
 
-        if "Gebruikersnaam en/of wachtwoord" in body or "onjuist" in body.lower():
+        # 6. For 200/201 responses:
+        # Check classic V1 ERR_MSG container (avoids false-positive matches on harmless footer links)
+        if v1_err:
+            if "onjuist" in v1_err.lower() or "gebruikersnaam" in v1_err.lower():
+                raise WebSessionError(
+                    f"e-Boekhouden web login failed: {v1_err}. "
+                    "(Note: If logging in from a new IP address or location for the first time in 30 days, "
+                    "e-Boekhouden may block access and dispatch an email verification link to authorize this IP address. "
+                    "Check your email for an IP confirmation message and approve the link or code before retrying.)"
+                )
+            raise WebSessionError(f"e-Boekhouden web login failed: {v1_err}")
+
+        # Check JSON response token
+        if json_data is not None:
+            token = json_data.get("token")
+            if not isinstance(token, str) or not token.strip():
+                raise WebSessionError(
+                    "e-Boekhouden web login response did not contain a valid token."
+                )
+            return self._persist_token(token, persist_to_keyring=persist_to_keyring)
+
+        # If HTML form returned without auth token
+        if 'id="txtEmail"' in body or 'name="txtEmail"' in body:
             raise WebSessionError(
-                "e-Boekhouden web login failed: Gebruikersnaam en/of wachtwoord is onjuist."
-            )
-        if "tweestapsverificatie" in body.lower():
-            raise WebSessionError(
-                "e-Boekhouden web login requires 2FA verification code (tweestapsverificatie)."
+                "e-Boekhouden web login failed: login form returned without an authentication token. "
+                "(Note: If logging in from a new IP address or location for the first time in 30 days, "
+                "e-Boekhouden may block access and dispatch an email verification link to authorize this IP address. "
+                "Check your email for an IP confirmation message.)"
             )
 
-        try:
-            data = response.json()
-        except Exception as exc:
-            raise WebSessionError(
-                f"Failed to parse login response JSON: {body[:200]}"
-            ) from exc
-
-        token = data.get("token") if isinstance(data, dict) else None
-        if not isinstance(token, str) or not token.strip():
-            raise WebSessionError(
-                "e-Boekhouden web login response did not contain a valid token."
-            )
-
-        return self._persist_token(token, persist_to_keyring=persist_to_keyring)
+        raise WebSessionError(f"Failed to parse login response JSON: {body[:200]}")
 
     def _login_via_v1_session(
         self,
         client: httpx.Client,
         username: str,
         password: str,
+        two_factor_code: str = "",
         *,
         persist_to_keyring: bool,
     ) -> str:
@@ -849,6 +1023,9 @@ class WebSessionClient:
             "FP": "2557579786",
             "XSRVX": srvrid,
         }
+        if two_factor_code:
+            form_data["txt2FA"] = two_factor_code
+            form_data["txtCode"] = two_factor_code
         post_resp = client.post(
             f"{v1_url}?LOGIN=1",
             data=form_data,
@@ -867,6 +1044,7 @@ class WebSessionClient:
         client: httpx.AsyncClient,
         username: str,
         password: str,
+        two_factor_code: str = "",
         *,
         persist_to_keyring: bool,
     ) -> str:
@@ -888,6 +1066,9 @@ class WebSessionClient:
             "FP": "2557579786",
             "XSRVX": srvrid,
         }
+        if two_factor_code:
+            form_data["txt2FA"] = two_factor_code
+            form_data["txtCode"] = two_factor_code
         post_resp = await client.post(
             f"{v1_url}?LOGIN=1",
             data=form_data,
@@ -929,6 +1110,7 @@ class WebSessionClient:
                     self._http,
                     payload["username"],
                     payload["password"],
+                    payload.get("twoFactorCode", ""),
                     persist_to_keyring=should_persist,
                 )
             return self._parse_login_response(resp, persist_to_keyring=should_persist)
@@ -941,6 +1123,7 @@ class WebSessionClient:
                 client,
                 payload["username"],
                 payload["password"],
+                payload.get("twoFactorCode", ""),
                 persist_to_keyring=should_persist,
             )
 
@@ -972,6 +1155,7 @@ class WebSessionClient:
                     self._async_http,
                     payload["username"],
                     payload["password"],
+                    payload.get("twoFactorCode", ""),
                     persist_to_keyring=should_persist,
                 )
             return self._parse_login_response(resp, persist_to_keyring=should_persist)
@@ -984,8 +1168,106 @@ class WebSessionClient:
                 client,
                 payload["username"],
                 payload["password"],
+                payload.get("twoFactorCode", ""),
                 persist_to_keyring=should_persist,
             )
+
+    @staticmethod
+    def _extract_whitelist_code(code_or_url: str) -> str:
+        """Extract verification code from a raw code or confirmation URL."""
+        raw = str(code_or_url).strip()
+        if not raw:
+            raise ValueError("Verification code or confirmation URL must not be empty.")
+        m = re.search(r"[?&]code=([^&\s#]+)", raw)
+        if m:
+            return m.group(1).strip()
+        return raw.strip("'\"")
+
+    def _handle_whitelist_response(
+        self, response: httpx.Response, code: str
+    ) -> dict[str, Any]:
+        """Parse response from POST /v1/api/loginwhitelist/whitelist."""
+        body = response.text.strip().strip('"')
+        if response.status_code in (200, 201):
+            if "Success" in body:
+                result: dict[str, Any] = {
+                    "success": True,
+                    "status": "Success",
+                    "code": code,
+                    "message": "Bedankt voor de bevestiging. Vanaf nu kun je inloggen vanaf dit IP-adres.",
+                }
+                if self.has_login_credentials():
+                    try:
+                        fresh_token = self.login(
+                            persist_to_keyring=self.persist_to_keyring
+                        )
+                        result["auto_login"] = True
+                        result["auth_token"] = fresh_token
+                    except Exception as exc:
+                        logger.warning("Auto-login after IP whitelist failed: %s", exc)
+                        result["auto_login"] = False
+                return result
+            if "Already whitelisted" in body:
+                result = {
+                    "success": True,
+                    "status": "Already whitelisted",
+                    "code": code,
+                    "message": "Je IP-adres is al toegevoegd aan de whitelist.",
+                }
+                if self.has_login_credentials():
+                    try:
+                        fresh_token = self.login(
+                            persist_to_keyring=self.persist_to_keyring
+                        )
+                        result["auto_login"] = True
+                        result["auth_token"] = fresh_token
+                    except Exception as exc:
+                        logger.warning("Auto-login after IP whitelist failed: %s", exc)
+                        result["auto_login"] = False
+                return result
+            if "Code invalid" in body or "invalid" in body.lower():
+                raise WebSessionError(
+                    "The IP verification code is invalid or has expired. "
+                    "Please initiate a new login or action to receive a fresh verification link from e-Boekhouden."
+                )
+            raise WebSessionError(f"IP whitelist failed: {body[:200]}")
+        raise WebSessionError(
+            f"IP whitelist request failed (HTTP {response.status_code}): {body[:200]}"
+        )
+
+    def whitelist_ip(self, code_or_url: str) -> dict[str, Any]:
+        """Authorize the current IP address using the verification code or approval link sent by e-Boekhouden."""
+        code = self._extract_whitelist_code(code_or_url)
+        url = f"{self.base_url}/v1/api/loginwhitelist/whitelist"
+        headers = {
+            k: v
+            for k, v in self._get_headers().items()
+            if k not in ("Authorization", "Cookie")
+        }
+        if self._http is not None:
+            resp = self._http.post(url, params={"code": code}, headers=headers)
+            return self._handle_whitelist_response(resp, code)
+        with httpx.Client(timeout=self.timeout) as client:
+            resp = client.post(url, params={"code": code}, headers=headers)
+            return self._handle_whitelist_response(resp, code)
+
+    async def async_whitelist_ip(self, code_or_url: str) -> dict[str, Any]:
+        """Async version of whitelist_ip."""
+        code = self._extract_whitelist_code(code_or_url)
+        url = f"{self.base_url}/v1/api/loginwhitelist/whitelist"
+        headers = {
+            k: v
+            for k, v in self._get_headers().items()
+            if k not in ("Authorization", "Cookie")
+        }
+        if self._async_http is not None:
+            resp = await self._async_http.post(
+                url, params={"code": code}, headers=headers
+            )
+            return self._handle_whitelist_response(resp, code)
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, params={"code": code}, headers=headers)
+            return self._handle_whitelist_response(resp, code)
 
     def _get_headers(self) -> dict[str, str]:
         headers = {

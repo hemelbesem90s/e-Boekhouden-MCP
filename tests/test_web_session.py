@@ -14,9 +14,12 @@ from pydantic import SecretStr
 from eboekhouden_mcp.config import MCPConfig
 from eboekhouden_mcp.server import EBoekhoudenMCPServer
 from eboekhouden_mcp.web_session.client import (
+    IPVerificationRequiredError,
     SessionExpiredError,
+    TwoFactorRequiredError,
     WebSessionClient,
     WebSessionError,
+    _extract_v1_error_message,
     _validate_local_file_path,
     build_afschrift_params,
     normalize_web_mutation_payload,
@@ -33,6 +36,7 @@ from eboekhouden_mcp.web_session.tools import (
     SaveWebMutationTool,
     SuggestMutationForBankStatementTool,
     UploadArchiveFileTool,
+    WhitelistWebSessionIpTool,
 )
 
 
@@ -2360,3 +2364,252 @@ async def test_time_tracking_and_invoice_update_write_tools():
     finally:
         sync_http_test.close()
         await async_http_test.aclose()
+
+
+# --------------------------------------------------------------------------- #
+# IP Verification Challenge & Whitelist Tests
+# --------------------------------------------------------------------------- #
+
+
+def test_extract_v1_error_message():
+    """Test extracting error text from <span id="ERR_MSG">."""
+    assert (
+        _extract_v1_error_message(
+            '<span id="ERR_MSG"><font color=red><center>Foutmelding</center></font></span>'
+        )
+        == "Foutmelding"
+    )
+    assert _extract_v1_error_message("<html>Geen fout hier</html>") is None
+
+
+def test_login_ip_verification_html():
+    """Verify that an HTML response indicating an IP challenge raises IPVerificationRequiredError."""
+    html_ip_challenge = """
+    <html>
+        <table id="formWrapper">
+            <span id="ERR_MSG"><font color=red><center>Inloggen vanaf een nieuw IP-adres. Bevestig uw IP-adres via de e-mail.</center></font></span>
+        </table>
+        <a id="resetPassword" href="/overig/vergeten">Gebruikersnaam en/of wachtwoord vergeten</a>
+    </html>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=html_ip_challenge)
+
+    client = WebSessionClient(
+        username="user@example.com",
+        password="secretpassword",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    with pytest.raises(IPVerificationRequiredError) as exc_info:
+        client._parse_login_response(
+            httpx.Response(200, text=html_ip_challenge), persist_to_keyring=False
+        )
+    assert exc_info.value.code == "IP_VERIFICATION_REQUIRED"
+    assert "IP" in str(exc_info.value) or "ip" in str(exc_info.value)
+
+
+def test_login_ip_verification_json():
+    """Verify that a JSON response with IP verification signals raises IPVerificationRequiredError."""
+    # Test errorType
+    resp_type = httpx.Response(
+        403,
+        json={
+            "errorType": "ip_verification",
+            "message": "Nieuw IP-adres vereist verificatie",
+        },
+    )
+    client = WebSessionClient()
+    with pytest.raises(IPVerificationRequiredError) as exc_info:
+        client._parse_login_response(resp_type, persist_to_keyring=False)
+    assert exc_info.value.code == "IP_VERIFICATION_REQUIRED"
+
+    # Test code
+    resp_code = httpx.Response(
+        401,
+        json={"code": "IP_VERIFICATION_REQUIRED", "message": "Verify your IP address"},
+    )
+    with pytest.raises(IPVerificationRequiredError):
+        client._parse_login_response(resp_code, persist_to_keyring=False)
+
+
+def test_login_two_factor_detection():
+    """Verify that 2FA prompts in HTML or JSON raise TwoFactorRequiredError."""
+    html_2fa = """
+    <html>
+        <div>U heeft gekozen om gebruik te maken van tweestapsverificatie bij het inloggen.</div>
+        <a id="resetPassword">Gebruikersnaam en/of wachtwoord vergeten</a>
+    </html>
+    """
+    client = WebSessionClient()
+    with pytest.raises(TwoFactorRequiredError) as exc_info:
+        client._parse_login_response(
+            httpx.Response(200, text=html_2fa), persist_to_keyring=False
+        )
+    assert exc_info.value.code == "TWO_FACTOR_REQUIRED"
+
+    # JSON 2FA
+    json_2fa = httpx.Response(
+        400,
+        json={"errorType": "two_factor", "message": "Two factor code required"},
+    )
+    with pytest.raises(TwoFactorRequiredError):
+        client._parse_login_response(json_2fa, persist_to_keyring=False)
+
+
+def test_login_does_not_false_positive_on_footer_reset_link():
+    """V1 login pages with footer reset password link must not trigger invalid credentials error."""
+    # HTML without ERR_MSG and without tokens (e.g. initial re-render without explicit error)
+    html_benign = """
+    <html>
+        <form name="frm" Action="inloggen.asp?LOGIN=1" method="post">
+            <input type="text" id="txtEmail" name="txtEmail">
+            <input type="password" id="txtWachtwoord" name="txtWachtwoord">
+        </form>
+        <a id="resetPassword" href="/overig/vergeten">Gebruikersnaam en/of wachtwoord vergeten</a>
+    </html>
+    """
+    client = WebSessionClient()
+    with pytest.raises(WebSessionError) as exc_info:
+        client._parse_login_response(
+            httpx.Response(200, text=html_benign), persist_to_keyring=False
+        )
+    # It should not claim "Gebruikersnaam en/of wachtwoord is onjuist"
+    assert "login form returned without an authentication token" in str(exc_info.value)
+    # But it includes helpful note about new IP address blocks
+    assert "new IP address" in str(exc_info.value)
+
+
+def test_login_credentials_failure_includes_ip_guidance():
+    """Real invalid credentials error in ERR_MSG must include guidance about potential new IP blocks."""
+    html_err = """
+    <html>
+        <span id="ERR_MSG"><font color=red><center>Gebruikersnaam en/of wachtwoord is onjuist</center></font></span>
+        <a id="resetPassword" href="/overig/vergeten">Gebruikersnaam en/of wachtwoord vergeten</a>
+    </html>
+    """
+    client = WebSessionClient()
+    with pytest.raises(WebSessionError) as exc_info:
+        client._parse_login_response(
+            httpx.Response(200, text=html_err), persist_to_keyring=False
+        )
+    err_str = str(exc_info.value)
+    assert "Gebruikersnaam en/of wachtwoord is onjuist" in err_str
+    assert "new IP address" in err_str
+
+
+def test_extract_whitelist_code():
+    """Test extracting code from raw code string and full confirmation URLs."""
+    assert WebSessionClient._extract_whitelist_code("XYZ123ABC") == "XYZ123ABC"
+    assert (
+        WebSessionClient._extract_whitelist_code(
+            "https://secure20.e-boekhouden.nl/overig/login-whitelist?code=ABC-9988-XYZ"
+        )
+        == "ABC-9988-XYZ"
+    )
+    assert (
+        WebSessionClient._extract_whitelist_code(
+            "https://secure20.e-boekhouden.nl/overig/login-whitelist?other=1&code=CODE77#section"
+        )
+        == "CODE77"
+    )
+    with pytest.raises(ValueError, match="must not be empty"):
+        WebSessionClient._extract_whitelist_code("   ")
+
+
+def test_whitelist_ip_sync_success_and_auto_login():
+    """Test whitelist_ip with code and URL, triggering auto-login when credentials exist."""
+    whitelist_calls: list[str] = []
+    login_calls: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/v1/api/loginwhitelist/whitelist" in url and request.method == "POST":
+            code = request.url.params.get("code", "")
+            whitelist_calls.append(code)
+            return httpx.Response(200, text='"Success"')
+        if "/v1/api/auth/login" in url and request.method == "POST":
+            login_calls.append(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(200, json={"token": "fresh-whitelisted-jwt"})
+        return httpx.Response(404)
+
+    mock_http = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    client = WebSessionClient(
+        username="jacob_user",
+        password="secret_pass",
+        http_client=mock_http,
+    )
+    result = client.whitelist_ip(
+        "https://secure20.e-boekhouden.nl/overig/login-whitelist?code=TOKEN_555"
+    )
+
+    assert result["success"] is True
+    assert result["status"] == "Success"
+    assert result["code"] == "TOKEN_555"
+    assert result["auto_login"] is True
+    assert result["auth_token"] == "fresh-whitelisted-jwt"
+    assert client.auth_token == "fresh-whitelisted-jwt"
+    assert whitelist_calls == ["TOKEN_555"]
+    assert len(login_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_whitelist_ip_async_already_whitelisted():
+    """Test async_whitelist_ip returning 'Already whitelisted'."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text='"Already whitelisted"')
+
+    mock_async = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    client = WebSessionClient(async_http_client=mock_async)
+    result = await client.async_whitelist_ip("TOKEN_ALREADY_OK")
+
+    assert result["success"] is True
+    assert result["status"] == "Already whitelisted"
+    assert result["code"] == "TOKEN_ALREADY_OK"
+
+
+def test_whitelist_ip_invalid_code():
+    """Test whitelist_ip with an expired or invalid code."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text='"Code invalid"')
+
+    mock_http = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    client = WebSessionClient(http_client=mock_http)
+    with pytest.raises(WebSessionError, match="invalid or has expired"):
+        client.whitelist_ip("EXPIRED_CODE")
+
+
+@pytest.mark.asyncio
+async def test_whitelist_web_session_ip_tool_execute():
+    """Test executing WhitelistWebSessionIpTool directly."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text='"Success"')
+
+    mock_async = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    client = WebSessionClient(async_http_client=mock_async)
+    tool = WhitelistWebSessionIpTool(client)
+
+    result = await tool.execute(
+        None,
+        {
+            "code_or_url": "https://secure20.e-boekhouden.nl/overig/login-whitelist?code=TOOL_CODE_123"
+        },
+    )
+    assert result["success"] is True
+    assert result["status"] == "Success"
+    assert result["code"] == "TOOL_CODE_123"
