@@ -186,6 +186,26 @@ class MCPConfig(BaseSettings):
         default="https://secure20.e-boekhouden.nl",
         validation_alias="EBOEKHOUDEN_MCP_WEB_SESSION_BASE_URL",
     )
+    web_proxy: str | None = Field(
+        default=None,
+        validation_alias="EBOEKHOUDEN_MCP_WEB_PROXY",
+    )
+    auto_whitelist_ip: bool = Field(
+        default=True,
+        validation_alias="EBOEKHOUDEN_MCP_AUTO_WHITELIST_IP",
+    )
+    imap_server: str | None = Field(
+        default=None,
+        validation_alias="EBOEKHOUDEN_MCP_IMAP_SERVER",
+    )
+    imap_username: str | None = Field(
+        default=None,
+        validation_alias="EBOEKHOUDEN_MCP_IMAP_USERNAME",
+    )
+    imap_password: SecretStr | None = Field(
+        default=None,
+        validation_alias="EBOEKHOUDEN_MCP_IMAP_PASSWORD",
+    )
 
     @model_validator(mode="before")
     @classmethod

@@ -220,9 +220,24 @@ eboekhouden-mcp --set-secret-token "your-secret-api-token-here"
 # Optional: Store Web Session login credentials for automatic 5-day JWT renewal
 eboekhouden-mcp --set-web-credentials "your-username" "your-password"
 eboekhouden-mcp --refresh-web-token
+
+# Optional: Store IMAP credentials for autonomous IP whitelisting
+eboekhouden-mcp --set-imap-credentials "imap.gmail.com" "jacob@grobler.nl" "your-app-password"
+
+# Optional: Whitelist current IP manually via code/URL or automatically via email poll
+eboekhouden-mcp --whitelist-ip "https://secure20.e-boekhouden.nl/overig/login-whitelist?code=ABC123XYZ"
+eboekhouden-mcp --auto-whitelist-ip
 ```
 
 When `web_username` and `web_password` are stored in Keyring, `WebSessionClient` automatically logs in via `POST /v1/api/auth/login` whenever a session token is missing or expires (`HTTP 401` / `SECURITY_010`), persists the fresh `web_session_token` back to Keyring, and retries the request transparently.
+
+### Autonomous New-IP Whitelisting Bridge
+
+Whenever e-Boekhouden detects a login from a new or unrecognized IP address, it halts immediate login and dispatches a verification link to your registered email address. With `auto_whitelist_ip: true` (default), `WebSessionClient`:
+1. Intercepts the IP authorization challenge non-destructively.
+2. Polls your IMAP inbox using `BODY.PEEK` (preserving the `UNSEEN` status of your email so messages remain unread).
+3. Extracts the approval link/code and automatically submits it via `POST /v1/api/loginwhitelist/whitelist`.
+4. Completes login and returns the fresh JWT `auth-token` to your MCP client without manual intervention.
 
 ---
 
@@ -242,6 +257,11 @@ Settings are configured via environment variables or a `.env` file in the workin
 | `EBOEKHOUDEN_MCP_WEB_PASSWORD` | No | — | Web login password for automatic session renewal (*Optional if stored in Keyring as `web_password`) |
 | `EBOEKHOUDEN_MCP_WEB_TOTP_SECRET` | No | — | Optional Base32 TOTP secret if 2FA is enabled (*Optional if stored in Keyring as `web_totp_secret`) |
 | `EBOEKHOUDEN_MCP_WEB_SESSION_BASE_URL` | No | `https://secure20.e-boekhouden.nl` | Base URL for internal web session requests |
+| `EBOEKHOUDEN_MCP_WEB_PROXY` | No | — | Optional HTTP or SOCKS5 proxy URL (e.g. `socks5://127.0.0.1:1080`) for fixed egress IP routing |
+| `EBOEKHOUDEN_MCP_AUTO_WHITELIST_IP` | No | `true` | Enable autonomous IMAP polling & IP whitelisting on new-IP email challenges |
+| `EBOEKHOUDEN_MCP_IMAP_SERVER` | No | `imap.gmail.com` | IMAP server for auto-whitelisting (*Falls back to Keyring `grobler_gmail`) |
+| `EBOEKHOUDEN_MCP_IMAP_USERNAME` | No | — | IMAP username/email for auto-whitelisting (*Falls back to Keyring `grobler_gmail`) |
+| `EBOEKHOUDEN_MCP_IMAP_PASSWORD` | No | — | IMAP password or app password for auto-whitelisting (*Falls back to Keyring `grobler_gmail`) |
 | `EBOEKHOUDEN_MCP_API_URL` | No | `https://api.e-boekhouden.nl/` | Official e-Boekhouden REST API endpoint |
 | `EBOEKHOUDEN_MCP_ALLOW_CUSTOM_API_URL` | No | `false` | Restrict connections strictly to official API host unless set to `true` |
 | `EBOEKHOUDEN_MCP_SOURCE` | No | `MCP-Server` | Source identifier logged with API requests |

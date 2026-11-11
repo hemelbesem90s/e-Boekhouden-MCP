@@ -98,6 +98,15 @@ class EBoekhoudenMCPServer:
                 ),
                 keyring_service_name=self.config.keyring_service_name,
                 persist_to_keyring=has_web_creds,
+                proxy=self.config.web_proxy,
+                auto_whitelist_on_ip_challenge=self.config.auto_whitelist_ip,
+                imap_server=self.config.imap_server,
+                imap_username=self.config.imap_username,
+                imap_password=(
+                    self.config.imap_password.get_secret_value()
+                    if self.config.imap_password
+                    else None
+                ),
             )
             for tool_name in WEB_SESSION_TOOL_NAMES:
                 registered_tool = self.registry.get(tool_name)
@@ -397,6 +406,22 @@ def main() -> None:
         action="store_true",
         help="authenticate with stored web_username/web_password and save a fresh web_session_token in keyring",
     )
+    parser.add_argument(
+        "--whitelist-ip",
+        metavar="CODE_OR_URL",
+        help="authorize the current IP address using the verification code or approval URL sent by email",
+    )
+    parser.add_argument(
+        "--auto-whitelist-ip",
+        action="store_true",
+        help="poll email for e-Boekhouden IP verification approval and authorize the current IP address automatically",
+    )
+    parser.add_argument(
+        "--set-imap-credentials",
+        nargs=3,
+        metavar=("SERVER", "USERNAME", "PASSWORD"),
+        help="store IMAP server, username, and password in OS keyring for autonomous IP whitelisting",
+    )
     parser.add_argument("--version", action="version", version="%(prog)s 0.2.0")
     args = parser.parse_args()
 
@@ -445,6 +470,66 @@ def main() -> None:
             return
         except Exception as exc:
             print(f"Web session login failed: {exc}", file=sys.stderr)
+            raise SystemExit(1) from None
+
+    if args.set_imap_credentials:
+        srv_val, user_val, pass_val = args.set_imap_credentials
+        set_keyring_secret("eboekhouden_mcp", "imap_server", srv_val)
+        set_keyring_secret("eboekhouden_mcp", "imap_username", user_val)
+        set_keyring_secret("eboekhouden_mcp", "imap_password", pass_val)
+        print("Stored IMAP credentials in keyring (service 'eboekhouden_mcp').")
+        return
+
+    if args.whitelist_ip:
+        from eboekhouden_mcp.web_session.tools import _lookup_live_web_credentials
+        from eboekhouden_mcp.web_session.client import WebSessionClient
+
+        user, pwd, totp = _lookup_live_web_credentials()
+        web_client = WebSessionClient(
+            username=user or None,
+            password=pwd or None,
+            totp_secret=totp or None,
+            persist_to_keyring=bool(user and pwd),
+        )
+        try:
+            res = web_client.whitelist_ip(args.whitelist_ip)
+            print(f"IP whitelist successful: {res.get('message', res.get('status'))}")
+            if res.get("auto_login"):
+                print("Fresh web session token saved to keyring.")
+            return
+        except Exception as exc:
+            print(f"IP whitelist failed: {exc}", file=sys.stderr)
+            raise SystemExit(1) from None
+
+    if args.auto_whitelist_ip:
+        from eboekhouden_mcp.web_session.tools import _lookup_live_web_credentials
+        from eboekhouden_mcp.web_session.client import WebSessionClient
+        from eboekhouden_mcp.web_session.email_whitelist import poll_for_whitelist_code
+
+        print("Polling email for e-Boekhouden IP verification authorization...")
+        code = poll_for_whitelist_code(timeout_seconds=35.0)
+        if not code:
+            print(
+                "Error: No e-Boekhouden IP verification email found within timeout.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        print(f"Found verification link/code: {code}. Submitting IP whitelist...")
+        user, pwd, totp = _lookup_live_web_credentials()
+        web_client = WebSessionClient(
+            username=user or None,
+            password=pwd or None,
+            totp_secret=totp or None,
+            persist_to_keyring=bool(user and pwd),
+        )
+        try:
+            res = web_client.whitelist_ip(code)
+            print(f"IP whitelist successful: {res.get('message', res.get('status'))}")
+            if res.get("auto_login"):
+                print("Fresh web session token saved to keyring.")
+            return
+        except Exception as exc:
+            print(f"IP whitelist failed: {exc}", file=sys.stderr)
             raise SystemExit(1) from None
 
     if args.fix_keychain_acl:

@@ -99,6 +99,10 @@ def _resolve_web_client(
             "Set EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN or store web_username and web_password "
             "in keyring (service 'eboekhouden_mcp')."
         )
+    proxy = (os.environ.get("EBOEKHOUDEN_MCP_WEB_PROXY") or "").strip() or None
+    auto_whitelist = os.environ.get(
+        "EBOEKHOUDEN_MCP_AUTO_WHITELIST_IP", "true"
+    ).lower() in ("true", "1", "yes")
     return WebSessionClient(
         auth_token=token,
         base_url=base_url,
@@ -107,6 +111,8 @@ def _resolve_web_client(
         totp_secret=totp_secret,
         keyring_service_name=service_name,
         persist_to_keyring=bool(username and password),
+        proxy=proxy,
+        auto_whitelist_on_ip_challenge=auto_whitelist,
     )
 
 

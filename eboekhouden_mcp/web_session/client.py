@@ -688,7 +688,15 @@ class WebSessionClient:
         totp_secret: str | None = None,
         keyring_service_name: str = "eboekhouden_mcp",
         persist_to_keyring: bool = False,
+        proxy: str | None = None,
+        auto_whitelist_on_ip_challenge: bool = True,
+        imap_server: str | None = None,
+        imap_username: str | None = None,
+        imap_password: str | None = None,
+        cookies: dict[str, str] | None = None,
     ) -> None:
+        import os
+
         self.auth_token = auth_token.strip() if auth_token else ""
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -699,6 +707,23 @@ class WebSessionClient:
         self.totp_secret = totp_secret.strip() if totp_secret else ""
         self.keyring_service_name = keyring_service_name
         self.persist_to_keyring = persist_to_keyring
+        self.proxy = (
+            proxy.strip()
+            if proxy
+            else (os.environ.get("EBOEKHOUDEN_MCP_WEB_PROXY") or "").strip() or None
+        )
+        self.auto_whitelist_on_ip_challenge = (
+            auto_whitelist_on_ip_challenge
+            if auto_whitelist_on_ip_challenge is not None
+            else (
+                os.environ.get("EBOEKHOUDEN_MCP_AUTO_WHITELIST_IP", "true").lower()
+                in ("true", "1", "yes")
+            )
+        )
+        self.imap_server = imap_server
+        self.imap_username = imap_username
+        self.imap_password = imap_password
+        self.cookies: dict[str, str] = dict(cookies or {})
 
     def set_token(self, token: str) -> None:
         """Update the web session auth token."""
@@ -822,6 +847,7 @@ class WebSessionClient:
     def _parse_login_response(
         self, response: httpx.Response, *, persist_to_keyring: bool
     ) -> str:
+        self._update_cookies_from_response(response)
         cookie_or_json_token = self._extract_auth_token_from_response(response)
         if cookie_or_json_token:
             return self._persist_token(
@@ -1014,6 +1040,7 @@ class WebSessionClient:
                 "User-Agent": self._get_headers()["user-agent"],
             },
         )
+        self._update_cookies_from_response(get_resp)
         form_check, srvrid = self._extract_v1_login_fields(get_resp.text, get_resp)
         form_data = {
             "txtEmail": username,
@@ -1021,7 +1048,7 @@ class WebSessionClient:
             "submit1": "Inloggen",
             "txtFormCheck": form_check,
             "FP": "2557579786",
-            "XSRVX": srvrid,
+            "XSRVX": srvrid or self.cookies.get("SRVRID", ""),
         }
         if two_factor_code:
             form_data["txt2FA"] = two_factor_code
@@ -1035,6 +1062,7 @@ class WebSessionClient:
                 "User-Agent": self._get_headers()["user-agent"],
             },
         )
+        self._update_cookies_from_response(post_resp)
         return self._parse_login_response(
             post_resp, persist_to_keyring=persist_to_keyring
         )
@@ -1057,6 +1085,7 @@ class WebSessionClient:
                 "User-Agent": self._get_headers()["user-agent"],
             },
         )
+        self._update_cookies_from_response(get_resp)
         form_check, srvrid = self._extract_v1_login_fields(get_resp.text, get_resp)
         form_data = {
             "txtEmail": username,
@@ -1064,7 +1093,7 @@ class WebSessionClient:
             "submit1": "Inloggen",
             "txtFormCheck": form_check,
             "FP": "2557579786",
-            "XSRVX": srvrid,
+            "XSRVX": srvrid or self.cookies.get("SRVRID", ""),
         }
         if two_factor_code:
             form_data["txt2FA"] = two_factor_code
@@ -1078,6 +1107,7 @@ class WebSessionClient:
                 "User-Agent": self._get_headers()["user-agent"],
             },
         )
+        self._update_cookies_from_response(post_resp)
         return self._parse_login_response(
             post_resp, persist_to_keyring=persist_to_keyring
         )
@@ -1089,6 +1119,7 @@ class WebSessionClient:
         two_factor_code: str | None = None,
         *,
         persist_to_keyring: bool | None = None,
+        auto_whitelist: bool = True,
     ) -> str:
         """Authenticate against e-Boekhouden web session and update self.auth_token."""
         payload = self._build_login_payload(username, password, two_factor_code)
@@ -1103,28 +1134,72 @@ class WebSessionClient:
             for k, v in self._get_headers().items()
             if k not in ("Authorization", "Cookie")
         }
-        if self._http is not None:
-            resp = self._http.post(url, json=payload, headers=headers)
-            if resp.status_code >= 500:
+        try:
+            if self._http is not None:
+                resp = self._http.post(url, json=payload, headers=headers)
+                if resp.status_code >= 500:
+                    return self._login_via_v1_session(
+                        self._http,
+                        payload["username"],
+                        payload["password"],
+                        payload.get("twoFactorCode", ""),
+                        persist_to_keyring=should_persist,
+                    )
+                return self._parse_login_response(
+                    resp, persist_to_keyring=should_persist
+                )
+
+            with httpx.Client(
+                follow_redirects=True,
+                timeout=self.timeout,
+                proxy=self.proxy,
+            ) as client:
                 return self._login_via_v1_session(
-                    self._http,
+                    client,
                     payload["username"],
                     payload["password"],
                     payload.get("twoFactorCode", ""),
                     persist_to_keyring=should_persist,
                 )
-            return self._parse_login_response(resp, persist_to_keyring=should_persist)
+        except IPVerificationRequiredError as exc:
+            if not auto_whitelist or not self.auto_whitelist_on_ip_challenge:
+                raise
+            logger.info(
+                "e-Boekhouden IP verification required. Attempting autonomous email whitelisting..."
+            )
+            from eboekhouden_mcp.web_session.email_whitelist import (
+                poll_for_whitelist_code,
+            )
 
-        with httpx.Client(
-            follow_redirects=True,
-            timeout=self.timeout,
-        ) as client:
-            return self._login_via_v1_session(
-                client,
+            code_or_url = poll_for_whitelist_code(
+                imap_server=self.imap_server,
+                username=self.imap_username,
+                password=self.imap_password,
+                timeout_seconds=35.0,
+            )
+            if not code_or_url:
+                logger.warning(
+                    "Auto-whitelist timed out waiting for verification email."
+                )
+                raise exc
+
+            logger.info(
+                "Extracted IP verification link/code from email: %s. Authorizing IP...",
+                code_or_url,
+            )
+            wl_result = self.whitelist_ip(code_or_url)
+            if self.auth_token:
+                return self.auth_token
+            if wl_result.get("auth_token"):
+                return self._persist_token(
+                    str(wl_result["auth_token"]), persist_to_keyring=should_persist
+                )
+            return self.login(
                 payload["username"],
                 payload["password"],
-                payload.get("twoFactorCode", ""),
+                payload.get("twoFactorCode"),
                 persist_to_keyring=should_persist,
+                auto_whitelist=False,
             )
 
     async def async_login(
@@ -1134,6 +1209,7 @@ class WebSessionClient:
         two_factor_code: str | None = None,
         *,
         persist_to_keyring: bool | None = None,
+        auto_whitelist: bool = True,
     ) -> str:
         """Async version of e-Boekhouden web session login."""
         payload = self._build_login_payload(username, password, two_factor_code)
@@ -1148,28 +1224,72 @@ class WebSessionClient:
             for k, v in self._get_headers().items()
             if k not in ("Authorization", "Cookie")
         }
-        if self._async_http is not None:
-            resp = await self._async_http.post(url, json=payload, headers=headers)
-            if resp.status_code >= 500:
+        try:
+            if self._async_http is not None:
+                resp = await self._async_http.post(url, json=payload, headers=headers)
+                if resp.status_code >= 500:
+                    return await self._async_login_via_v1_session(
+                        self._async_http,
+                        payload["username"],
+                        payload["password"],
+                        payload.get("twoFactorCode", ""),
+                        persist_to_keyring=should_persist,
+                    )
+                return self._parse_login_response(
+                    resp, persist_to_keyring=should_persist
+                )
+
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=self.timeout,
+                proxy=self.proxy,
+            ) as client:
                 return await self._async_login_via_v1_session(
-                    self._async_http,
+                    client,
                     payload["username"],
                     payload["password"],
                     payload.get("twoFactorCode", ""),
                     persist_to_keyring=should_persist,
                 )
-            return self._parse_login_response(resp, persist_to_keyring=should_persist)
+        except IPVerificationRequiredError as exc:
+            if not auto_whitelist or not self.auto_whitelist_on_ip_challenge:
+                raise
+            logger.info(
+                "e-Boekhouden IP verification required. Attempting autonomous email whitelisting..."
+            )
+            from eboekhouden_mcp.web_session.email_whitelist import (
+                async_poll_for_whitelist_code,
+            )
 
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=self.timeout,
-        ) as client:
-            return await self._async_login_via_v1_session(
-                client,
+            code_or_url = await async_poll_for_whitelist_code(
+                imap_server=self.imap_server,
+                username=self.imap_username,
+                password=self.imap_password,
+                timeout_seconds=35.0,
+            )
+            if not code_or_url:
+                logger.warning(
+                    "Auto-whitelist timed out waiting for verification email."
+                )
+                raise exc
+
+            logger.info(
+                "Extracted IP verification link/code from email: %s. Authorizing IP...",
+                code_or_url,
+            )
+            wl_result = await self.async_whitelist_ip(code_or_url)
+            if self.auth_token:
+                return self.auth_token
+            if wl_result.get("auth_token"):
+                return self._persist_token(
+                    str(wl_result["auth_token"]), persist_to_keyring=should_persist
+                )
+            return await self.async_login(
                 payload["username"],
                 payload["password"],
-                payload.get("twoFactorCode", ""),
+                payload.get("twoFactorCode"),
                 persist_to_keyring=should_persist,
+                auto_whitelist=False,
             )
 
     @staticmethod
@@ -1183,10 +1303,29 @@ class WebSessionClient:
             return m.group(1).strip()
         return raw.strip("'\"")
 
+    def _update_cookies_from_response(self, response: httpx.Response) -> None:
+        """Extract cookies from response and Set-Cookie headers into client's cookie jar."""
+        all_resps = list(getattr(response, "history", []) or []) + [response]
+        for r in all_resps:
+            try:
+                for k, v in r.cookies.items():
+                    if k and v:
+                        self.cookies[k] = v
+            except Exception:  # nosec B110
+                pass
+            for sc in r.headers.get_list("set-cookie"):
+                parts = sc.split(";")[0].split("=", 1)
+                if len(parts) == 2:
+                    cname = parts[0].strip()
+                    cval = parts[1].strip()
+                    if cname and cval:
+                        self.cookies[cname] = cval
+
     def _handle_whitelist_response(
         self, response: httpx.Response, code: str
     ) -> dict[str, Any]:
         """Parse response from POST /v1/api/loginwhitelist/whitelist."""
+        self._update_cookies_from_response(response)
         body = response.text.strip().strip('"')
         if response.status_code in (200, 201):
             if "Success" in body:
@@ -1199,7 +1338,8 @@ class WebSessionClient:
                 if self.has_login_credentials():
                     try:
                         fresh_token = self.login(
-                            persist_to_keyring=self.persist_to_keyring
+                            persist_to_keyring=self.persist_to_keyring,
+                            auto_whitelist=False,
                         )
                         result["auto_login"] = True
                         result["auth_token"] = fresh_token
@@ -1217,7 +1357,8 @@ class WebSessionClient:
                 if self.has_login_credentials():
                     try:
                         fresh_token = self.login(
-                            persist_to_keyring=self.persist_to_keyring
+                            persist_to_keyring=self.persist_to_keyring,
+                            auto_whitelist=False,
                         )
                         result["auto_login"] = True
                         result["auth_token"] = fresh_token
@@ -1247,7 +1388,7 @@ class WebSessionClient:
         if self._http is not None:
             resp = self._http.post(url, params={"code": code}, headers=headers)
             return self._handle_whitelist_response(resp, code)
-        with httpx.Client(timeout=self.timeout) as client:
+        with httpx.Client(timeout=self.timeout, proxy=self.proxy) as client:
             resp = client.post(url, params={"code": code}, headers=headers)
             return self._handle_whitelist_response(resp, code)
 
@@ -1265,25 +1406,44 @@ class WebSessionClient:
                 url, params={"code": code}, headers=headers
             )
             return self._handle_whitelist_response(resp, code)
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, proxy=self.proxy) as client:
             resp = await client.post(url, params={"code": code}, headers=headers)
             return self._handle_whitelist_response(resp, code)
 
     def _get_headers(self) -> dict[str, str]:
+        import sys
+
+        if sys.platform == "darwin":
+            ua = (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+            )
+        else:
+            ua = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+            )
+
         headers = {
             "accept": "application/json, text/plain, */*",
             "accept-language": "nl,en-GB;q=0.9,en;q=0.8",
             "content-type": "application/json",
             "dnt": "1",
             "origin": self.base_url,
-            "user-agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-            ),
+            "user-agent": ua,
         }
+        cookie_parts: list[str] = []
         if self.auth_token:
             headers["Authorization"] = self.auth_token
-            headers["Cookie"] = f"auth-token={self.auth_token}"
+            cookie_parts.append(f"auth-token={self.auth_token}")
+
+        for k, v in self.cookies.items():
+            if k != "auth-token" and v:
+                cookie_parts.append(f"{k}={v}")
+
+        if cookie_parts:
+            headers["Cookie"] = "; ".join(cookie_parts)
+
         return headers
 
     @staticmethod
@@ -1309,6 +1469,7 @@ class WebSessionClient:
 
     def _check_response(self, response: httpx.Response) -> Any:
         """Validate response status and detect session expiration or upstream error envelopes."""
+        self._update_cookies_from_response(response)
         body = response.text
         if response.status_code == 401:
             raise SessionExpiredError(
@@ -1360,6 +1521,7 @@ class WebSessionClient:
             base_url=self.base_url,
             headers=self._get_headers(),
             timeout=self.timeout,
+            proxy=self.proxy,
         )
         return _SyncAutoAuthClient(self, raw_client)
 
@@ -1370,6 +1532,7 @@ class WebSessionClient:
             base_url=self.base_url,
             headers=self._get_headers(),
             timeout=self.timeout,
+            proxy=self.proxy,
         )
         return _AsyncAutoAuthClient(self, raw_client, close_on_exit=True)
 

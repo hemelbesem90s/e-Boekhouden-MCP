@@ -154,3 +154,62 @@ async def test_invalid_tool_arguments_are_rejected_before_api_access():
     assert "Input validation error" in result.root.content[0].text
     assert "unexpected" in result.root.content[0].text
     assert "not echoed" not in result.root.content[0].text
+
+
+def test_server_cli_whitelist_ip_flag(monkeypatch, capsys):
+    """Test executing server with --whitelist-ip."""
+    from unittest.mock import MagicMock
+    from eboekhouden_mcp.server import main
+
+    mock_client = MagicMock()
+    mock_client.whitelist_ip.return_value = {
+        "success": True,
+        "message": "IP whitelisted",
+        "auto_login": True,
+    }
+    monkeypatch.setattr(
+        "eboekhouden_mcp.web_session.client.WebSessionClient",
+        lambda *a, **kw: mock_client,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "server.py",
+            "--whitelist-ip",
+            "https://secure20.e-boekhouden.nl/overig/login-whitelist?code=ABC777",
+        ],
+    )
+
+    main()
+    captured = capsys.readouterr()
+    assert "IP whitelist successful" in captured.out
+    assert "Fresh web session token saved" in captured.out
+
+
+def test_server_cli_set_imap_credentials(monkeypatch, capsys):
+    """Test storing IMAP credentials via --set-imap-credentials."""
+    from eboekhouden_mcp.server import main
+
+    stored_secrets = {}
+
+    def mock_set_secret(service, account, secret):
+        stored_secrets[(service, account)] = secret
+
+    monkeypatch.setattr("eboekhouden_mcp.server.set_keyring_secret", mock_set_secret)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "server.py",
+            "--set-imap-credentials",
+            "imap.custom.nl",
+            "admin@custom.nl",
+            "secret_pass",
+        ],
+    )
+
+    main()
+    captured = capsys.readouterr()
+    assert "Stored IMAP credentials in keyring" in captured.out
+    assert stored_secrets[("eboekhouden_mcp", "imap_server")] == "imap.custom.nl"
+    assert stored_secrets[("eboekhouden_mcp", "imap_username")] == "admin@custom.nl"
+    assert stored_secrets[("eboekhouden_mcp", "imap_password")] == "secret_pass"

@@ -2613,3 +2613,251 @@ async def test_whitelist_web_session_ip_tool_execute():
     assert result["success"] is True
     assert result["status"] == "Success"
     assert result["code"] == "TOOL_CODE_123"
+
+
+def test_email_whitelist_extract_url_and_code():
+    from eboekhouden_mcp.web_session.email_whitelist import (
+        extract_whitelist_url_or_code,
+    )
+
+    url1 = "https://secure20.e-boekhouden.nl/overig/login-whitelist?code=ABC-123-XYZ"
+    assert extract_whitelist_url_or_code(url1) == url1
+
+    html_text = '<p>Klik op <a href="https://secure.e-boekhouden.nl/overig/login-whitelist?code=CLASSIC99">deze link</a> om uw IP goed te keuren.</p>'
+    assert (
+        extract_whitelist_url_or_code(html_text)
+        == "https://secure.e-boekhouden.nl/overig/login-whitelist?code=CLASSIC99"
+    )
+
+    code_fragment = "Uw unieke autorisatiecode is: ?code=SEC_CODE_777"
+    assert extract_whitelist_url_or_code(code_fragment) == "SEC_CODE_777"
+
+    assert extract_whitelist_url_or_code("Geen relevante link hier.") is None
+    assert extract_whitelist_url_or_code("") is None
+
+
+def test_lookup_imap_credentials(monkeypatch):
+    from eboekhouden_mcp.web_session.email_whitelist import lookup_imap_credentials
+
+    monkeypatch.setenv("EBOEKHOUDEN_MCP_IMAP_SERVER", "imap.custom.nl")
+    monkeypatch.setenv("EBOEKHOUDEN_MCP_IMAP_USERNAME", "testuser@custom.nl")
+    monkeypatch.setenv("EBOEKHOUDEN_MCP_IMAP_PASSWORD", "secret_imap_pw")
+
+    creds = lookup_imap_credentials()
+    assert creds == ("imap.custom.nl", "testuser@custom.nl", "secret_imap_pw")
+
+
+def test_poll_for_whitelist_code_mocked(monkeypatch):
+    from eboekhouden_mcp.web_session.email_whitelist import poll_for_whitelist_code
+    from unittest.mock import MagicMock
+    import email.message
+
+    mock_mail = MagicMock()
+    mock_mail.select.return_value = ("OK", [b"1"])
+    mock_mail.search.return_value = ("OK", [b"101"])
+
+    hdr_msg = email.message.Message()
+    hdr_msg["From"] = "e-Boekhouden.nl <info@e-boekhouden.nl>"
+    hdr_msg["Subject"] = "Bevestig uw nieuwe IP-adres voor e-Boekhouden"
+    hdr_msg["Date"] = email.utils.formatdate(localtime=True)
+
+    full_msg = email.message.Message()
+    full_msg["From"] = "e-Boekhouden.nl <info@e-boekhouden.nl>"
+    full_msg["Subject"] = "Bevestig uw nieuwe IP-adres voor e-Boekhouden"
+    full_msg.set_payload(
+        "Klik hier om te bevestigen: https://secure20.e-boekhouden.nl/overig/login-whitelist?code=POLLED_CODE_99"
+    )
+
+    def fetch_side_effect(mid, query):
+        if "HEADER" in query:
+            return ("OK", [(b"101", hdr_msg.as_bytes())])
+        return ("OK", [(b"101", full_msg.as_bytes())])
+
+    mock_mail.fetch.side_effect = fetch_side_effect
+
+    monkeypatch.setattr("imaplib.IMAP4_SSL", lambda *a, **kw: mock_mail)
+
+    code = poll_for_whitelist_code(
+        imap_server="imap.example.com",
+        username="jacob@example.com",
+        password="dummy_password",
+        timeout_seconds=2.0,
+        poll_interval=0.1,
+    )
+    assert (
+        code
+        == "https://secure20.e-boekhouden.nl/overig/login-whitelist?code=POLLED_CODE_99"
+    )
+
+
+def test_login_auto_whitelist_on_ip_challenge_success(monkeypatch):
+    """Test that login automatically triggers email polling and whitelists new IP on IP challenge."""
+    whitelist_called = []
+    attempt = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempt
+        url = str(request.url)
+        if "/v1/api/auth/login" in url and request.method == "POST":
+            attempt += 1
+            if attempt == 1:
+                return httpx.Response(
+                    403,
+                    json={
+                        "errorType": "ip_verification",
+                        "message": "Nieuw IP-adres gedetecteerd. Bevestig per e-mail.",
+                    },
+                )
+            return httpx.Response(200, json={"token": "fresh-jwt-after-auto-whitelist"})
+        if "/v1/api/loginwhitelist/whitelist" in url and request.method == "POST":
+            code = request.url.params.get("code", "")
+            whitelist_called.append(code)
+            return httpx.Response(200, text='"Success"')
+        return httpx.Response(404)
+
+    mock_http = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    client = WebSessionClient(
+        username="jacob_user",
+        password="secret_pass",
+        http_client=mock_http,
+        auto_whitelist_on_ip_challenge=True,
+    )
+
+    monkeypatch.setattr(
+        "eboekhouden_mcp.web_session.email_whitelist.poll_for_whitelist_code",
+        lambda **kwargs: "AUTO_POLLED_TOKEN_888",
+    )
+
+    tok = client.login()
+    assert tok == "fresh-jwt-after-auto-whitelist"
+    assert client.auth_token == "fresh-jwt-after-auto-whitelist"
+    assert whitelist_called == ["AUTO_POLLED_TOKEN_888"]
+
+
+def test_login_auto_whitelist_disabled(monkeypatch):
+    """Test that login raises IPVerificationRequiredError when auto-whitelist is disabled."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "errorType": "ip_verification",
+                "message": "Nieuw IP-adres gedetecteerd.",
+            },
+        )
+
+    mock_http = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    client = WebSessionClient(
+        username="jacob_user",
+        password="secret_pass",
+        http_client=mock_http,
+        auto_whitelist_on_ip_challenge=False,
+    )
+
+    with pytest.raises(IPVerificationRequiredError):
+        client.login()
+
+
+def test_login_auto_whitelist_timeout_raises(monkeypatch):
+    """Test that login raises IPVerificationRequiredError if email polling times out."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "errorType": "ip_verification",
+                "message": "Nieuw IP-adres gedetecteerd.",
+            },
+        )
+
+    mock_http = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    client = WebSessionClient(
+        username="jacob_user",
+        password="secret_pass",
+        http_client=mock_http,
+        auto_whitelist_on_ip_challenge=True,
+    )
+
+    monkeypatch.setattr(
+        "eboekhouden_mcp.web_session.email_whitelist.poll_for_whitelist_code",
+        lambda **kwargs: None,
+    )
+
+    with pytest.raises(IPVerificationRequiredError):
+        client.login()
+
+
+@pytest.mark.asyncio
+async def test_async_login_auto_whitelist_success(monkeypatch):
+    """Test async_login auto-whitelisting on IP challenge."""
+    whitelist_called = []
+    attempt = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempt
+        url = str(request.url)
+        if "/v1/api/auth/login" in url and request.method == "POST":
+            attempt += 1
+            if attempt == 1:
+                return httpx.Response(
+                    403,
+                    json={
+                        "errorType": "ip_verification",
+                        "message": "Nieuw IP-adres gedetecteerd.",
+                    },
+                )
+            return httpx.Response(200, json={"token": "async-fresh-jwt-whitelisted"})
+        if "/v1/api/loginwhitelist/whitelist" in url and request.method == "POST":
+            code = request.url.params.get("code", "")
+            whitelist_called.append(code)
+            return httpx.Response(200, text='"Success"')
+        return httpx.Response(404)
+
+    mock_async = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://secure20.e-boekhouden.nl",
+    )
+    client = WebSessionClient(
+        username="jacob_user",
+        password="secret_pass",
+        async_http_client=mock_async,
+        auto_whitelist_on_ip_challenge=True,
+    )
+
+    async def mock_async_poll(**kwargs):
+        return "ASYNC_CODE_333"
+
+    monkeypatch.setattr(
+        "eboekhouden_mcp.web_session.email_whitelist.async_poll_for_whitelist_code",
+        mock_async_poll,
+    )
+
+    tok = await client.async_login()
+    assert tok == "async-fresh-jwt-whitelisted"
+    assert client.auth_token == "async-fresh-jwt-whitelisted"
+    assert whitelist_called == ["ASYNC_CODE_333"]
+
+
+def test_proxy_and_cookies_configuration():
+    """Test client initializes proxy and cookie jar correctly."""
+    client = WebSessionClient(
+        auth_token="jwt_123",
+        proxy="socks5://127.0.0.1:1080",
+        cookies={"SRVRID": "srv7", "DG": "device_guid_1"},
+    )
+    assert client.proxy == "socks5://127.0.0.1:1080"
+    assert client.cookies["SRVRID"] == "srv7"
+    assert client.cookies["DG"] == "device_guid_1"
+    headers = client._get_headers()
+    assert "auth-token=jwt_123" in headers["Cookie"]
+    assert "SRVRID=srv7" in headers["Cookie"]
+    assert "DG=device_guid_1" in headers["Cookie"]
