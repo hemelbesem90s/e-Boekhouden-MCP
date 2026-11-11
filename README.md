@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10--3.13-3776AB?logo=python&logoColor=white" alt="Python 3.10 through 3.13">
-  <img src="https://img.shields.io/badge/MCP-stdio%20%7C%2083%20Tools-147D64" alt="MCP stdio 83 Tools">
+  <img src="https://img.shields.io/badge/MCP-stdio%20%7C%2084%20Tools-147D64" alt="MCP stdio 84 Tools">
   <img src="https://img.shields.io/badge/Biometric%20Gate-Windows%20Hello%20%7C%20Touch%20ID-blueviolet" alt="Biometric Hardware Gate">
   <img src="https://img.shields.io/badge/Credential%20Store-Keyring%20%2F%20Keychain-0078D4" alt="OS Keyring Integration">
   <img src="https://img.shields.io/badge/Coverage-82%25-brightgreen" alt="82% Test Coverage">
@@ -21,7 +21,7 @@
   <a href="#architectural-layers">Architecture</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#ai-client-configuration">AI assistants</a> ·
-  <a href="#tool-catalog-83-tools">Tool catalog</a> ·
+  <a href="#tool-catalog-84-tools">Tool catalog</a> ·
   <a href="#security--biometric-hardware-gate">Biometric security</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#credits--attribution">Credits & Attribution</a>

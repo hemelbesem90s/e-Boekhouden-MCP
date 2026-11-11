@@ -28,6 +28,7 @@ project's boundary.
 | Credential leakage | Pydantic secret types redact config representations; errors omit request bodies and values. |
 | Malformed tool input | Strict JSON schemas reject unknown fields, bad limits, invalid nested rows, and oversized batches before API access. |
 | Session races | Session creation, refresh, and API requests are serialized; one expired-session retry is allowed. |
+| New-IP login block | Autonomous IMAP `BODY.PEEK` email whitelisting bridge authorizes new egress IPs non-destructively without marking user emails as read. |
 | Arbitrary file read | Archive delivery is disabled separately and resolves every file beneath one configured root. |
 | Oversized attachment | Archive files are limited to 3 MiB and an allowlist of PDF/image extensions. |
 | Protocol corruption | Application logs go to stderr; stdout is reserved for MCP JSON-RPC. |
@@ -51,6 +52,16 @@ To avoid storing credentials in plaintext `.env` files:
 python -c "import keyring; keyring.set_password('eboekhouden_mcp', 'secret_token', '<your-token>')"
 ```
 The server checks `keyring.get_password('eboekhouden_mcp', 'secret_token')` when `EBOEKHOUDEN_MCP_SECRET_TOKEN` is unset.
+
+## Autonomous Web Session IP Whitelisting & Proxy Controls
+
+e-Boekhouden enforces a 30-day server-side IP allowlist for web logins (`https://secure20.e-boekhouden.nl`). When a login occurs from an unrecognized IP address, e-Boekhouden blocks immediate login and sends a confirmation link by email.
+
+When `EBOEKHOUDEN_MCP_AUTO_WHITELIST_IP=true` (default), `WebSessionClient` handles this challenge automatically (see [ADR 0002](adr/ADR_0002_Web_Session_IP_Whitelist_Workaround.md)):
+1. **Read-Only IMAP Inspection (`BODY.PEEK`)**: The server connects to the configured IMAP inbox (`readonly=True`, 15-second socket timeout) and inspects recent e-Boekhouden confirmation emails using `BODY.PEEK[]`. This guarantees the user's inbox unread status (`\Seen` flag) is never modified.
+2. **Credential Resolution**: IMAP credentials resolve from `EBOEKHOUDEN_MCP_IMAP_*` environment variables, `eboekhouden_mcp` Keyring entries (`--set-imap-credentials`), or existing `grobler_gmail` macOS Keychain items (`email` / `app_password`).
+3. **Recursion Guard**: Only one automatic whitelist attempt is permitted per login flow (`_allow_auto_whitelist=False` on retry).
+4. **Optional Static Egress Proxy**: Operators can set `EBOEKHOUDEN_MCP_WEB_PROXY` (e.g. `socks5://127.0.0.1:1080`) to route all web session requests through a fixed static exit node.
 
 ## Operator responsibilities
 

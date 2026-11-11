@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Autonomous IMAP email polling & IP whitelisting bridge (`eboekhouden_mcp/web_session/email_whitelist.py`) using read-only `BODY.PEEK` to resolve new-IP challenges automatically during headless web session login.
+- Session cookie jar persistence (`SRVRID`, `DG`, `LG`, `ISLOGINX`, `v1_sessionKey`), host OS User-Agent alignment, and optional HTTP/SOCKS5 egress proxy routing (`EBOEKHOUDEN_MCP_WEB_PROXY`).
+- CLI flags `--whitelist-ip`, `--auto-whitelist-ip`, and `--set-imap-credentials` in `eboekhouden-mcp`.
+- Architecture Decision Record `docs/adr/ADR_0002_Web_Session_IP_Whitelist_Workaround.md`.
 - Strict MCP input validation for pagination, invoice lines, and batch requests.
 - Rate-limit metadata and one-time expired-session recovery.
 - Coverage, type checking, security scanning, CodeQL, and release artifact checks.

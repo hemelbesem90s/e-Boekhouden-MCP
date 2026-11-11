@@ -4,10 +4,13 @@
 
 ```text
 eboekhouden_mcp/
-  config.py          operator configuration and host guards
-  server.py          MCP lifecycle, policy, validation, and error mapping
+  biometric_guard.py native Windows Hello / macOS Touch ID write verification
+  config.py          operator configuration, OS keyring bridge, and host guards
+  server.py          MCP lifecycle, policy, CLI flags, validation, and error mapping
+  inbox/             Dutch VAT decision trees and booking proposal heuristics
   tools/             thin MCP tool adapters
   tools/power/       bounded search, batch, and report tools
+  web_session/       cookie-based web session client, autonomous IMAP IP whitelisting, and tools
 eboekhouden/
   client.py          HTTP client and session lifecycle
   services/          endpoint-specific API operations

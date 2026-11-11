@@ -1,3 +1,13 @@
+---
+id: ADR-0002
+title: "Autonomous Web Session IP Whitelisting & Egress Architecture"
+status: accepted
+created: 2026-11-11
+updated: 2026-11-11
+tags: [architecture, adr, security, web-session, imap, proxy]
+Create PDF: False
+---
+
 # ADR 0002: Autonomous Web Session IP Whitelisting & Egress Architecture
 
 - **Status**: Approved & Implemented
@@ -6,6 +16,13 @@
 - **Consulted**: `grobler-eboekhouden-accounting`, `26077I_GRBL_eBoekhouden_Hybrid_MCP`
 
 ---
+
+> [!CAUTION]
+> **CRITICAL INVARIANT (Chesterton's Fence)**:
+> 1. **Non-Destructive IMAP Polling (`BODY.PEEK`)**: All automated IMAP polling in `eboekhouden_mcp/web_session/email_whitelist.py` MUST select the mailbox with `readonly=True` and fetch messages exclusively via `(BODY.PEEK[])`. Never use `RFC822` or `(BODY[])`, which sets the `\Seen` flag on the server and silently marks the user's incoming emails as read.
+> 2. **Bounded Socket Timeout**: `imaplib.IMAP4_SSL` MUST always be instantiated with an explicit `timeout=15` to prevent hung network sockets from blocking the MCP stdio event loop.
+> 3. **Recursion Guard (`auto_whitelist=False`)**: When `whitelist_ip()` performs a post-whitelist login (`login()` / `async_login()`), it MUST pass `_allow_auto_whitelist=False` to prevent infinite recursion if e-Boekhouden returns a second IP challenge.
+> 4. **No `Chrome Safe Storage` Keychain Probing**: Never query macOS Keychain for `Chrome Safe Storage` from an unsigned Python/CLI process; doing so triggers a blocking macOS system password modal that hangs headless execution.
 
 ## 1. Context & Problem Statement
 
@@ -100,5 +117,5 @@ We implement a **3-Tier Hybrid Architecture**:
   - Zero disruption to user's mailbox: emails inspected via `BODY.PEEK` remain unread.
   - 30-day IP whitelist persistence reduces email polling to once a month per network location.
 - **Test Coverage**:
-  - Full suite expanded to 204 unit and integration tests passing with 100% pass rate.
+  - Full suite expanded to 206 unit and integration tests passing with 100% pass rate.
   - Includes mocked IMAP polling, HTML link extraction, auto-login recursion prevention, proxy configuration, and timeout fallback.

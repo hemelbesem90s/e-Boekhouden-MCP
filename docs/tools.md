@@ -1,6 +1,6 @@
 # Tool catalog
 
-The server registers 83 tools across four architectural layers. The default surface contains 50 read-only tools (36 core REST v1 tools, 3 AI Bookkeeping Inbox tools, and 11 web session inspection tools). Enabling writes exposes 33 write tools (14 accounting write tools, 1 archive tool, and 18 web session write tools), gated behind explicit confirmation and native OS biometrics.
+The server registers 84 tools across four architectural layers. The default surface contains 51 read-only tools (36 core REST v1 tools, 3 AI Bookkeeping Inbox tools, and 12 web session inspection tools). Enabling writes exposes 33 write tools (14 accounting write tools, 1 archive tool, and 18 web session write tools), gated behind explicit confirmation and native OS biometrics.
 
 ## Search and batch detail
 
