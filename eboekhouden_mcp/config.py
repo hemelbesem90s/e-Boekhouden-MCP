@@ -156,6 +156,12 @@ class MCPConfig(BaseSettings):
         default=True,
         validation_alias="EBOEKHOUDEN_MCP_REQUIRE_BIOMETRIC",
     )
+    biometric_ttl_seconds: int = Field(
+        default=300,
+        ge=0,
+        description="Seconds a successful biometric verification remains valid for subsequent batch write calls (0 = prompt on every call)",
+        validation_alias="EBOEKHOUDEN_MCP_BIOMETRIC_TTL_SECONDS",
+    )
     keyring_service_name: str = Field(
         default="eboekhouden_mcp",
         validation_alias="EBOEKHOUDEN_MCP_KEYRING_SERVICE",

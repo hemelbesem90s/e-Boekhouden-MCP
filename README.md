@@ -250,6 +250,7 @@ Settings are configured via environment variables or a `.env` file in the workin
 | `EBOEKHOUDEN_MCP_SECRET_TOKEN` | Yes* | — | e-Boekhouden REST API token (*Optional if stored in Keyring) |
 | `EBOEKHOUDEN_MCP_ENABLE_WRITE_TOOLS` | No | `false` | Expose create, update, and delete tools |
 | `EBOEKHOUDEN_MCP_REQUIRE_BIOMETRIC` | No | `true` | Enforce native Windows Hello / Touch ID biometric challenge on writes |
+| `EBOEKHOUDEN_MCP_BIOMETRIC_TTL_SECONDS` | No | `300` | Seconds biometric verification remains valid for batch writes (`0` = prompt every call) |
 | `EBOEKHOUDEN_MCP_KEYRING_SERVICE` | No | `eboekhouden_mcp` | Service name used for OS Keyring lookup |
 | `EBOEKHOUDEN_MCP_ENABLE_WEB_SESSION` | No | `false` | Enable web session bridge tools (bank import grid, attachment linking) |
 | `EBOEKHOUDEN_MCP_WEB_SESSION_TOKEN` | No | — | Session authentication token for web session endpoints (or auto-managed via Keyring) |

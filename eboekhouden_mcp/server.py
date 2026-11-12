@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sys
@@ -67,6 +68,7 @@ class EBoekhoudenMCPServer:
         self.config = config
         self.registry = ToolRegistry()
         self._client: EBoekhoudenClient | None = None
+        self._biometric_lock: asyncio.Lock | None = None
 
         # Register all tools
         register_all_tools(self.registry)
@@ -121,6 +123,13 @@ class EBoekhoudenMCPServer:
             api_url=config.api_url,
             source=config.source,
         )
+
+    @property
+    def biometric_lock(self) -> asyncio.Lock:
+        """Return the asyncio.Lock guarding concurrent biometric verification prompts."""
+        if self._biometric_lock is None:
+            self._biometric_lock = asyncio.Lock()
+        return self._biometric_lock
 
     def tool_is_enabled(self, name: str) -> bool:
         """Return whether an operator enabled the requested capability."""
@@ -270,7 +279,12 @@ def create_server(config: MCPConfig | None = None) -> Server:
             if mcp_server.config.require_biometric:
                 prompt = format_write_prompt(name, execution_arguments)
                 try:
-                    verify_user_presence(prompt)
+                    async with mcp_server.biometric_lock:
+                        await asyncio.to_thread(
+                            verify_user_presence,
+                            prompt,
+                            ttl_seconds=mcp_server.config.biometric_ttl_seconds,
+                        )
                 except (
                     BiometricVerificationDenied,
                     BiometricHardwareUnavailable,
@@ -362,7 +376,6 @@ async def run_server(config: MCPConfig | None = None) -> None:
 def main() -> None:
     """Entry point for the MCP server."""
     import argparse
-    import asyncio
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(

@@ -13,7 +13,9 @@ from pydantic import ValidationError
 from eboekhouden_mcp.biometric_guard import (
     BiometricHardwareUnavailable,
     BiometricVerificationDenied,
+    clear_biometric_cache,
     format_write_prompt,
+    get_biometric_cache_timestamp,
     verify_macos,
     verify_user_presence,
     verify_windows,
@@ -542,7 +544,8 @@ async def test_server_write_gate_biometric_success():
         )
         assert result.root.isError is not True
         mock_verify.assert_called_once_with(
-            "e-Boekhouden MCP: Approve DELETE delete_relation for ID 42?"
+            "e-Boekhouden MCP: Approve DELETE delete_relation for ID 42?",
+            ttl_seconds=300,
         )
         mock_delete.assert_called_once_with(42)
 
@@ -824,3 +827,302 @@ def test_verify_macos_osascript_timeout():
         pytest.raises(BiometricVerificationDenied, match="timed out"),
     ):
         _verify_macos_osascript("Approve action", timeout_seconds=15)
+
+
+# ============================================================================
+# 8. Biometric TTL Cache & Batch Approval Window Tests
+# ============================================================================
+
+
+def test_verify_user_presence_ttl_cache_avoids_subsequent_prompts():
+    """First call prompts the OS; subsequent calls within TTL succeed without OS prompt."""
+    with (
+        patch("sys.platform", "darwin"),
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_macos", return_value=True
+        ) as mock_mac,
+    ):
+        # First call triggers prompt and populates cache
+        assert verify_user_presence("Prompt 1", ttl_seconds=300) is True
+        assert mock_mac.call_count == 1
+
+        # Second call within TTL reuses cache
+        assert verify_user_presence("Prompt 2", ttl_seconds=300) is True
+        assert mock_mac.call_count == 1
+
+
+def test_verify_user_presence_expires_after_ttl():
+    """After TTL expires, the next verification triggers OS prompt again."""
+    current_time = [1000.0]
+
+    def mock_monotonic() -> float:
+        return current_time[0]
+
+    with (
+        patch("sys.platform", "darwin"),
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_macos", return_value=True
+        ) as mock_mac,
+        patch("time.monotonic", side_effect=mock_monotonic),
+    ):
+        # Call 1 at t=1000
+        assert verify_user_presence("Prompt 1", ttl_seconds=300) is True
+        assert mock_mac.call_count == 1
+
+        # Call 2 at t=1100 (within 300s window) -> cached
+        current_time[0] = 1100.0
+        assert verify_user_presence("Prompt 2", ttl_seconds=300) is True
+        assert mock_mac.call_count == 1
+
+        # Call 3 at t=1301 (>300s elapsed) -> prompts OS again
+        current_time[0] = 1301.0
+        assert verify_user_presence("Prompt 3", ttl_seconds=300) is True
+        assert mock_mac.call_count == 2
+
+
+def test_verify_user_presence_ttl_zero_prompts_every_call():
+    """ttl_seconds=0 disables cache and prompts OS on every call."""
+    with (
+        patch("sys.platform", "darwin"),
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_macos", return_value=True
+        ) as mock_mac,
+    ):
+        assert verify_user_presence("Prompt 1", ttl_seconds=0) is True
+        assert mock_mac.call_count == 1
+        assert get_biometric_cache_timestamp() is None
+
+        assert verify_user_presence("Prompt 2", ttl_seconds=0) is True
+        assert mock_mac.call_count == 2
+        assert get_biometric_cache_timestamp() is None
+
+
+def test_verify_user_presence_denied_clears_cache():
+    """A failed or denied verification clears the cache timestamp and raises error."""
+    with (
+        patch("sys.platform", "darwin"),
+        patch("eboekhouden_mcp.biometric_guard.verify_macos") as mock_mac,
+    ):
+        # 1. Warm cache
+        mock_mac.return_value = True
+        assert verify_user_presence("Warm cache", ttl_seconds=300) is True
+        assert get_biometric_cache_timestamp() is not None
+
+        # 2. Denied call (e.g. forced by ttl=0 or expiration)
+        mock_mac.side_effect = BiometricVerificationDenied("User clicked Cancel")
+        with pytest.raises(BiometricVerificationDenied, match="User clicked Cancel"):
+            verify_user_presence("Denied", ttl_seconds=0)
+
+        # 3. Cache timestamp is now cleared
+        assert get_biometric_cache_timestamp() is None
+
+
+def test_clear_biometric_cache_helper():
+    """Explicitly calling clear_biometric_cache resets the cached timestamp."""
+    with (
+        patch("sys.platform", "darwin"),
+        patch("eboekhouden_mcp.biometric_guard.verify_macos", return_value=True),
+    ):
+        assert verify_user_presence("Warm cache", ttl_seconds=300) is True
+        assert get_biometric_cache_timestamp() is not None
+
+        clear_biometric_cache()
+        assert get_biometric_cache_timestamp() is None
+
+
+def test_config_biometric_ttl_validation():
+    """MCPConfig validates biometric_ttl_seconds ge=0 and env loading."""
+    config = MCPConfig(
+        secret_token="dummy-token", biometric_ttl_seconds=600, _env_file=None
+    )
+    assert config.biometric_ttl_seconds == 600
+
+    config_zero = MCPConfig(
+        secret_token="dummy-token", biometric_ttl_seconds=0, _env_file=None
+    )
+    assert config_zero.biometric_ttl_seconds == 0
+
+    with pytest.raises(ValidationError):
+        MCPConfig(secret_token="dummy-token", biometric_ttl_seconds=-1, _env_file=None)
+
+
+@pytest.mark.asyncio
+async def test_server_batch_approval_window_single_prompt_for_multiple_writes():
+    """Multiple sequential write tool calls within biometric_ttl_seconds trigger only 1 OS prompt."""
+    config = MCPConfig(
+        secret_token="test-token",
+        enable_write_tools=True,
+        require_biometric=True,
+        biometric_ttl_seconds=300,
+        _env_file=None,
+    )
+    server = create_server(config)
+
+    with (
+        patch("sys.platform", "darwin"),
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_macos", return_value=True
+        ) as mock_mac,
+        patch("eboekhouden.services.relation.RelationService.delete") as mock_delete,
+    ):
+        # Call 1: triggers prompt
+        res1 = await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(
+                    name="delete_relation",
+                    arguments={"id": 101, "confirm": True},
+                )
+            )
+        )
+        assert res1.root.isError is not True
+        assert mock_mac.call_count == 1
+
+        # Call 2: within TTL, succeeds without second OS prompt
+        res2 = await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(
+                    name="delete_relation",
+                    arguments={"id": 102, "confirm": True},
+                )
+            )
+        )
+        assert res2.root.isError is not True
+        assert mock_mac.call_count == 1  # Still 1!
+
+        # Call 3: within TTL, succeeds without second OS prompt
+        res3 = await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(
+                    name="delete_relation",
+                    arguments={"id": 103, "confirm": True},
+                )
+            )
+        )
+        assert res3.root.isError is not True
+        assert mock_mac.call_count == 1  # Still 1!
+        assert mock_delete.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_server_concurrent_batch_writes_trigger_only_one_os_prompt():
+    """Concurrent write tool calls dispatched in a batch await the lock and trigger exactly 1 OS prompt."""
+    import asyncio
+
+    config = MCPConfig(
+        secret_token="test-token",
+        enable_write_tools=True,
+        require_biometric=True,
+        biometric_ttl_seconds=300,
+        _env_file=None,
+    )
+    server = create_server(config)
+
+    def slow_verify_macos(prompt, timeout_seconds=60):
+        import time
+
+        time.sleep(0.05)  # Simulate user taking 50ms to touch sensor
+        return True
+
+    with (
+        patch("sys.platform", "darwin"),
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_macos",
+            side_effect=slow_verify_macos,
+        ) as mock_mac,
+        patch("eboekhouden.services.relation.RelationService.delete"),
+    ):
+        # Dispatch 5 calls concurrently
+        tasks = [
+            server.request_handlers[CallToolRequest](
+                CallToolRequest(
+                    params=CallToolRequestParams(
+                        name="delete_relation",
+                        arguments={"id": 200 + i, "confirm": True},
+                    )
+                )
+            )
+            for i in range(5)
+        ]
+        results = await asyncio.gather(*tasks)
+
+        for res in results:
+            assert res.root.isError is not True
+
+        # Exactly 1 OS prompt was shown across all 5 concurrent calls!
+        assert mock_mac.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_server_biometric_ttl_zero_prompts_on_every_write():
+    """When biometric_ttl_seconds=0, every write tool call prompts the OS."""
+    config = MCPConfig(
+        secret_token="test-token",
+        enable_write_tools=True,
+        require_biometric=True,
+        biometric_ttl_seconds=0,
+        _env_file=None,
+    )
+    server = create_server(config)
+
+    with (
+        patch("sys.platform", "darwin"),
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_macos", return_value=True
+        ) as mock_mac,
+        patch("eboekhouden.services.relation.RelationService.delete"),
+    ):
+        res1 = await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(
+                    name="delete_relation",
+                    arguments={"id": 301, "confirm": True},
+                )
+            )
+        )
+        assert res1.root.isError is not True
+        assert mock_mac.call_count == 1
+
+        res2 = await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(
+                    name="delete_relation",
+                    arguments={"id": 302, "confirm": True},
+                )
+            )
+        )
+        assert res2.root.isError is not True
+        assert mock_mac.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_server_denied_biometric_clears_cache_and_blocks_batch():
+    """A denied biometric check returns error and ensures cache remains empty."""
+    config = MCPConfig(
+        secret_token="test-token",
+        enable_write_tools=True,
+        require_biometric=True,
+        biometric_ttl_seconds=300,
+        _env_file=None,
+    )
+    server = create_server(config)
+
+    with (
+        patch("sys.platform", "darwin"),
+        patch(
+            "eboekhouden_mcp.biometric_guard.verify_macos",
+            side_effect=BiometricVerificationDenied("User rejected Touch ID"),
+        ),
+        patch("eboekhouden.services.relation.RelationService.delete") as mock_delete,
+    ):
+        res = await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(
+                    name="delete_relation",
+                    arguments={"id": 401, "confirm": True},
+                )
+            )
+        )
+        assert res.root.isError is True
+        assert "Biometric verification denied" in res.root.content[0].text
+        assert mock_delete.call_count == 0
+        assert get_biometric_cache_timestamp() is None

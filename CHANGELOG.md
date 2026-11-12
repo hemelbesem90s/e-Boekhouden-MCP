@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Biometric Batch Approval Window (TTL session cache via `EBOEKHOUDEN_MCP_BIOMETRIC_TTL_SECONDS`, default 300s) enabling a single Touch ID / Windows Hello prompt for accounting write batches while retaining `confirm=true` validation on every call.
+- Async concurrency serialization lock (`mcp_server.biometric_lock`) preventing overlapping biometric prompts when MCP clients dispatch parallel tool calls.
 - Autonomous IMAP email polling & IP whitelisting bridge (`eboekhouden_mcp/web_session/email_whitelist.py`) using read-only `BODY.PEEK` to resolve new-IP challenges automatically during headless web session login.
 - Session cookie jar persistence (`SRVRID`, `DG`, `LG`, `ISLOGINX`, `v1_sessionKey`), host OS User-Agent alignment, and optional HTTP/SOCKS5 egress proxy routing (`EBOEKHOUDEN_MCP_WEB_PROXY`).
 - CLI flags `--whitelist-ip`, `--auto-whitelist-ip`, and `--set-imap-credentials` in `eboekhouden-mcp`.

@@ -14,7 +14,25 @@ import os
 import shutil
 import subprocess  # nosec B404
 import sys
+import threading
+import time
 from typing import Any
+
+_CACHE_LOCK = threading.Lock()
+_LAST_VERIFIED_MONOTONIC: float | None = None
+
+
+def clear_biometric_cache() -> None:
+    """Clear the cached biometric verification timestamp."""
+    global _LAST_VERIFIED_MONOTONIC
+    with _CACHE_LOCK:
+        _LAST_VERIFIED_MONOTONIC = None
+
+
+def get_biometric_cache_timestamp() -> float | None:
+    """Return the timestamp of the last successful biometric verification, or None."""
+    with _CACHE_LOCK:
+        return _LAST_VERIFIED_MONOTONIC
 
 
 class BiometricVerificationDenied(Exception):
@@ -692,12 +710,20 @@ def verify_macos(prompt_message: str, timeout_seconds: int = 60) -> bool:
     return _verify_macos_osascript(prompt_message, timeout_seconds)
 
 
-def verify_user_presence(prompt_message: str, timeout_seconds: int = 60) -> bool:
+def verify_user_presence(
+    prompt_message: str,
+    timeout_seconds: int = 60,
+    ttl_seconds: int = 0,
+) -> bool:
     """Perform native fail-closed biometric verification for the current OS.
 
     Args:
         prompt_message: Explanation message shown in the verification modal.
         timeout_seconds: Maximum time to wait for user interaction.
+        ttl_seconds: Seconds a successful verification remains valid for subsequent
+            batch write calls. If > 0 and a verification succeeded within the TTL window,
+            verification returns True immediately without prompting the OS.
+            (0 = prompt on every call).
 
     Returns:
         True if verification succeeded.
@@ -706,14 +732,38 @@ def verify_user_presence(prompt_message: str, timeout_seconds: int = 60) -> bool
         BiometricVerificationDenied: If user denies, cancels, or times out.
         BiometricHardwareUnavailable: If OS does not support or has no biometric hardware.
     """
-    if sys.platform == "win32":
-        return verify_windows(prompt_message, timeout_seconds=timeout_seconds)
-    if sys.platform == "darwin":
-        return verify_macos(prompt_message, timeout_seconds=timeout_seconds)
+    global _LAST_VERIFIED_MONOTONIC
 
-    raise BiometricHardwareUnavailable(
-        f"Biometric verification is not supported or unavailable on {sys.platform}."
-    )
+    if ttl_seconds > 0:
+        with _CACHE_LOCK:
+            if _LAST_VERIFIED_MONOTONIC is not None:
+                if (time.monotonic() - _LAST_VERIFIED_MONOTONIC) < ttl_seconds:
+                    return True
+
+    try:
+        if sys.platform == "win32":
+            res = verify_windows(prompt_message, timeout_seconds=timeout_seconds)
+        elif sys.platform == "darwin":
+            res = verify_macos(prompt_message, timeout_seconds=timeout_seconds)
+        else:
+            raise BiometricHardwareUnavailable(
+                f"Biometric verification is not supported or unavailable on {sys.platform}."
+            )
+
+        with _CACHE_LOCK:
+            if res and ttl_seconds > 0:
+                _LAST_VERIFIED_MONOTONIC = time.monotonic()
+            else:
+                _LAST_VERIFIED_MONOTONIC = None
+        return res
+    except (BiometricVerificationDenied, BiometricHardwareUnavailable):
+        with _CACHE_LOCK:
+            _LAST_VERIFIED_MONOTONIC = None
+        raise
+    except Exception:
+        with _CACHE_LOCK:
+            _LAST_VERIFIED_MONOTONIC = None
+        raise
 
 
 def main() -> None:

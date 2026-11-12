@@ -45,6 +45,17 @@ The modal dialog dynamically formats the transaction type and financial amounts:
 - *Mutations*: `"e-Boekhouden MCP: Approve POST Mutation of EUR 540.00 on Ledger 8000?"`
 - *Deletions*: `"e-Boekhouden MCP: Approve DELETE delete_relation for ID 123?"`
 
+### Biometric Batch Approval Window (TTL Session Cache)
+
+During accounting batch operations (e.g., booking several supplier invoices and reconciling bank mutations), requiring a separate Touch ID or Windows Hello modal on every individual tool call creates operator friction.
+
+The server provides a short-lived in-process TTL session cache (`EBOEKHOUDEN_MCP_BIOMETRIC_TTL_SECONDS`, default `300` seconds / 5 minutes):
+- **Single Prompt per Batch**: The first write tool call triggers an OS biometric challenge. Once verified, subsequent write tool calls within the TTL window succeed immediately without re-prompting.
+- **Fail-Closed on Denial or Error**: If biometric verification is canceled, denied, or fails, the cached timestamp is wiped immediately (`None`), blocking subsequent calls.
+- **Strict Parameter Validation Maintained**: Every write tool still requires explicit `confirm: true` from the client; only the OS biometric dialog is cached during the active batch window.
+- **Concurrency Serialization**: An `asyncio.Lock` serializes concurrent tool calls in the same batch so parallel requests queue safely and only the first call triggers the OS dialog, while concurrent calls reuse the newly opened TTL window.
+- **Prompt-on-Every-Call Mode**: Setting `EBOEKHOUDEN_MCP_BIOMETRIC_TTL_SECONDS=0` disables caching completely, requiring an OS biometric challenge on every write action.
+
 ## Keyring Credential Store
 
 To avoid storing credentials in plaintext `.env` files:
